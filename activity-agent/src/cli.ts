@@ -1,0 +1,1095 @@
+#!/usr/bin/env node
+
+import { resolve, join } from "path";
+import { homedir } from "os";
+import { existsSync, readFileSync } from "fs";
+import { ActivityAgent } from "./activity-agent.js";
+import { listScreenshots, getScreenshotsAfter } from "./screenshot-parser.js";
+import { loadAudioContextForTimestamp } from "./audio-context.js";
+import type { ActivityEntry } from "./types.js";
+
+// Load environment variables from ~/.env if it exists
+function loadEnvFile() {
+  const envPaths = [
+    join(homedir(), ".env"),
+    join(homedir(), ".config", "monitome", ".env"),
+  ];
+  
+  for (const envPath of envPaths) {
+    if (existsSync(envPath)) {
+      try {
+        const content = readFileSync(envPath, "utf-8");
+        for (const line of content.split("\n")) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith("#")) {
+            const eqIndex = trimmed.indexOf("=");
+            if (eqIndex > 0) {
+              const key = trimmed.slice(0, eqIndex).trim();
+              let value = trimmed.slice(eqIndex + 1).trim();
+              // Remove quotes if present
+              if ((value.startsWith('"') && value.endsWith('"')) || 
+                  (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+              }
+              if (!process.env[key]) {
+                process.env[key] = value;
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignore errors reading env file
+      }
+      break;
+    }
+  }
+}
+
+// Load env file before anything else
+loadEnvFile();
+
+// Default to Monitome's Application Support directory
+const DEFAULT_DATA_DIR = join(homedir(), "Library/Application Support/Monitome");
+
+function parseArgs(args: string[]): { dataDir: string; command: string; rest: string[] } {
+  let dataDir = DEFAULT_DATA_DIR;
+  let command = "status";
+  const rest: string[] = [];
+
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--data" || arg === "-d") {
+      if (i + 1 < args.length) {
+        dataDir = resolve(args[i + 1]);
+        i += 2;
+      } else {
+        console.error("Error: --data requires a path argument");
+        process.exit(1);
+      }
+    } else if (!command || command === "status") {
+      // First non-flag argument is the command
+      if (!arg.startsWith("-")) {
+        command = arg;
+        i++;
+      } else {
+        rest.push(arg);
+        i++;
+      }
+    } else {
+      rest.push(arg);
+      i++;
+    }
+  }
+
+  // If no command was found, it's still "status"
+  if (!command) command = "status";
+
+  return { dataDir, command, rest };
+}
+
+async function main() {
+  const rawArgs = process.argv.slice(2);
+  
+  // Handle help early
+  if (rawArgs.includes("--help") || rawArgs.includes("-h") || rawArgs[0] === "help") {
+    showHelp();
+    return;
+  }
+
+  const { dataDir, command, rest: args } = parseArgs(rawArgs);
+
+  switch (command) {
+    case "process": {
+      // Process all new screenshots
+      const limit = args[0] ? parseInt(args[0]) : undefined;
+      await processScreenshots(dataDir, limit);
+      break;
+    }
+
+    case "status": {
+      // Show current status
+      await showStatus(dataDir);
+      break;
+    }
+
+    case "search": {
+      // Smart agent search with tools
+      const debugIndex = args.indexOf("--debug");
+      const debug = debugIndex !== -1;
+      const filteredArgs = args.filter((a) => a !== "--debug");
+      const query = filteredArgs.join(" ");
+      if (!query) {
+        console.error("Usage: activity-agent search <query> [--debug]");
+        process.exit(1);
+      }
+      await agentSearch(dataDir, query, debug);
+      break;
+    }
+
+    case "fts": {
+      // Fast SQLite FTS5 search (direct, no agent)
+      const query = args.join(" ");
+      if (!query) {
+        console.error("Usage: activity-agent fts <query>");
+        process.exit(1);
+      }
+      await fastSearch(dataDir, query);
+      break;
+    }
+
+    case "find": {
+      // Simple keyword search
+      const query = args.join(" ");
+      if (!query) {
+        console.error("Usage: activity-agent find <keyword>");
+        process.exit(1);
+      }
+      await keywordSearch(dataDir, query);
+      break;
+    }
+
+    case "date": {
+      // Show entries for a specific date
+      const date = args[0];
+      if (!date) {
+        console.error("Usage: activity-agent date <YYYY-MM-DD>");
+        process.exit(1);
+      }
+      await showDate(dataDir, date);
+      break;
+    }
+
+    case "feedback": {
+      // Process natural language feedback
+      const feedback = args.join(" ");
+      if (!feedback) {
+        console.error("Usage: activity-agent feedback <natural language feedback>");
+        console.error('Example: activity-agent feedback "when I search for java blog it should find articles about Java CLI"');
+        process.exit(1);
+      }
+      await processFeedback(dataDir, feedback);
+      break;
+    }
+
+    case "rules": {
+      // Show current learned rules
+      await showRules(dataDir);
+      break;
+    }
+
+    case "history": {
+      // Show rules change history
+      await showHistory(dataDir);
+      break;
+    }
+
+    case "undo": {
+      // Undo last rule change
+      await undoLastRuleChange(dataDir);
+      break;
+    }
+
+    case "reanalyze": {
+      // Re-analyze screenshots with current rules
+      // Usage: activity-agent reanalyze [--date YYYY-MM-DD] [--from YYYY-MM-DD --to YYYY-MM-DD] [--files f1.jpg f2.jpg] [--all]
+      const dateIndex = args.indexOf("--date");
+      const fromIndex = args.indexOf("--from");
+      const toIndex = args.indexOf("--to");
+      const filesIndex = args.indexOf("--files");
+      const isAll = args.includes("--all");
+
+      if (dateIndex !== -1 && args[dateIndex + 1]) {
+        await reanalyzeScreenshots(dataDir, { type: "date", date: args[dateIndex + 1] });
+      } else if (fromIndex !== -1 && toIndex !== -1 && args[fromIndex + 1] && args[toIndex + 1]) {
+        await reanalyzeScreenshots(dataDir, { type: "dateRange", startDate: args[fromIndex + 1], endDate: args[toIndex + 1] });
+      } else if (filesIndex !== -1) {
+        const filenames = args.slice(filesIndex + 1).filter(a => !a.startsWith("--"));
+        if (filenames.length === 0) {
+          console.error("Usage: activity-agent reanalyze --files <file1.jpg> <file2.jpg> ...");
+          process.exit(1);
+        }
+        await reanalyzeScreenshots(dataDir, { type: "filenames", filenames });
+      } else if (isAll) {
+        await reanalyzeScreenshots(dataDir, { type: "all" });
+      } else {
+        console.error("Usage: activity-agent reanalyze [--date YYYY-MM-DD] [--from YYYY-MM-DD --to YYYY-MM-DD] [--files f1.jpg ...] [--all]");
+        console.error("\nExamples:");
+        console.error("  activity-agent reanalyze --date 2026-02-08");
+        console.error("  activity-agent reanalyze --from 2026-02-01 --to 2026-02-08");
+        console.error("  activity-agent reanalyze --files 20260208_161910210.jpg 20260208_162015333.jpg");
+        console.error("  activity-agent reanalyze --all");
+        process.exit(1);
+      }
+      break;
+    }
+
+    case "sync": {
+      // Sync JSON context to SQLite index
+      await syncIndex(dataDir);
+      break;
+    }
+
+    case "rebuild": {
+      // Rebuild SQLite index from scratch
+      await rebuildIndex(dataDir);
+      break;
+    }
+
+    case "apps": {
+      // List all apps
+      await listApps(dataDir);
+      break;
+    }
+
+    case "chat": {
+      // Chat message with optional history
+      // Usage: activity-agent chat <message> [--history '<json>']
+      const historyIndex = args.indexOf("--history");
+      let historyJson: string | undefined;
+      let messageArgs = args;
+      
+      if (historyIndex !== -1 && args[historyIndex + 1]) {
+        historyJson = args[historyIndex + 1];
+        messageArgs = [...args.slice(0, historyIndex), ...args.slice(historyIndex + 2)];
+      }
+      
+      const message = messageArgs.join(" ");
+      if (!message) {
+        console.error("Usage: activity-agent chat <message> [--history '<json>']");
+        process.exit(1);
+      }
+      await chatMessage(dataDir, message, historyJson);
+      break;
+    }
+
+    case "profile": {
+      // Show current user profile
+      await showProfile(dataDir);
+      break;
+    }
+
+    case "profile-update": {
+      // Update user profile based on recent activity
+      // --hours <N> to specify how many hours back to look (default: 1)
+      // --range <start> <end> to use a date range instead
+      const hoursIndex = args.indexOf("--hours");
+      const rangeIndex = args.indexOf("--range");
+      
+      if (rangeIndex !== -1) {
+        const startDate = args[rangeIndex + 1];
+        const endDate = args[rangeIndex + 2];
+        if (!startDate || !endDate) {
+          console.error("Usage: activity-agent profile-update --range <start-date> <end-date>");
+          console.error("Example: activity-agent profile-update --range 2026-01-01 2026-01-31");
+          process.exit(1);
+        }
+        await updateProfileForRange(dataDir, startDate, endDate);
+      } else {
+        const hours = hoursIndex !== -1 && args[hoursIndex + 1] 
+          ? parseInt(args[hoursIndex + 1]) 
+          : 1;
+        await updateProfile(dataDir, hours);
+      }
+      break;
+    }
+
+    case "profile-history": {
+      // Show profile update history
+      const count = args[0] ? parseInt(args[0]) : 10;
+      await showProfileHistory(dataDir, count);
+      break;
+    }
+
+    case "profile-rebuild": {
+      // Wipe profile and rebuild from all indexed entries
+      await rebuildProfile(dataDir);
+      break;
+    }
+
+    case "profile-restore": {
+      // Restore profile to a previous version
+      const index = args[0] ? parseInt(args[0]) : undefined;
+      if (index === undefined) {
+        console.error("Usage: activity-agent profile-restore <index>");
+        console.error("Use 'profile-history' to see available versions (0 = most recent change)");
+        process.exit(1);
+      }
+      await restoreProfile(dataDir, index);
+      break;
+    }
+
+    case "help":
+    default: {
+      showHelp();
+      break;
+    }
+  }
+}
+
+function showHelp() {
+  console.log(`
+Activity Agent - Screenshot activity tracker
+
+Usage: activity-agent [--data <path>] <command> [options]
+
+Global Options:
+  --data, -d <path>   Data directory (default: ~/Library/Application Support/Monitome)
+
+Commands:
+  chat <message>      Conversational interface - ask anything naturally
+  process [limit]     Process new screenshots (optionally limit count)
+  status              Show current processing status
+  search <query>      Smart search - agent uses tools to find activities
+                      Use --debug to see tool calls
+  fts <query>         Fast full-text search using SQLite FTS5 (no agent)
+  find <keyword>      Simple keyword search - exact text matching
+  date <YYYY-MM-DD>   Show entries for a specific date
+  apps                List all indexed applications
+  feedback <text>     Provide natural language feedback to improve indexing/search
+  rules               Show current learned rules
+  history             Show history of rule changes
+  undo                Undo the last rule change
+  reanalyze           Re-analyze screenshots with current rules (after rule changes)
+                      --date <YYYY-MM-DD>       Reanalyze a specific date
+                      --from <date> --to <date> Reanalyze a date range
+                      --files <f1> <f2> ...     Reanalyze specific files
+                      --all                     Reanalyze everything
+  sync                Sync JSON context to SQLite search index
+  rebuild             Rebuild SQLite search index from scratch
+
+User Profile:
+  profile             Show current user profile (interests, technologies, etc.)
+  profile-update      Update profile based on recent activity
+                      --hours <N>       Analyze last N hours (default: 1)
+                      --range <s> <e>   Analyze date range instead
+  profile-rebuild     Wipe and rebuild profile from all entries
+  profile-history [N] Show last N profile updates (default: 10)
+  profile-restore <i> Restore profile to version i (0 = most recent change)
+
+  help                Show this help
+
+Examples:
+  activity-agent chat "what was I working on yesterday?"
+  activity-agent chat "remember that for VS Code, always note the git branch"
+  activity-agent chat "reindex yesterday's screenshots with the new rules"
+  activity-agent chat "show me the rules"
+  activity-agent --data ~/screenshots status
+  activity-agent search "what was I doing yesterday" --debug
+  activity-agent reanalyze --date 2026-02-08
+  activity-agent reanalyze --from 2026-02-01 --to 2026-02-08
+  activity-agent profile-update --hours 24
+  activity-agent profile-update --range 2026-01-01 2026-01-31
+
+Environment:
+  ANTHROPIC_API_KEY   Required for the AI model
+`);
+}
+
+/**
+ * Format a single activity layer for CLI display
+ */
+function formatActivityForCli(act: { layer: string; app?: { name: string; windowTitle?: string; bundleOrPath?: string }; browser?: any; video?: any; ide?: any; terminal?: any; communication?: any; document?: any; activity: string; summary?: string; tags?: string[] }, indent = "    ", verbose = false): string {
+  const layerLabel = act.layer === "primary" ? "PRIMARY" : "OVERLAY";
+  const appName = act.app?.name || "Unknown";
+  const lines: string[] = [];
+
+  lines.push(`  [${layerLabel}] ${appName} — ${act.activity}`);
+
+  if (act.app?.windowTitle) lines.push(`${indent}Window: ${act.app.windowTitle}`);
+
+  if (act.browser) {
+    if (act.browser.url) lines.push(`${indent}URL: ${act.browser.url}`);
+    if (act.browser.pageTitle) lines.push(`${indent}Page: ${act.browser.pageTitle}`);
+    if (act.browser.pageType && act.browser.pageType !== "other") lines.push(`${indent}Type: ${act.browser.pageType}`);
+  }
+
+  if (act.video) {
+    lines.push(`${indent}Video: "${act.video.title || "Unknown"}"`);
+    if (act.video.channel) lines.push(`${indent}Channel: ${act.video.channel}`);
+    if (act.video.duration) {
+      const position = act.video.position ? `${act.video.position} / ` : "";
+      lines.push(`${indent}Duration: ${position}${act.video.duration}`);
+    }
+  }
+
+  if (act.ide) {
+    if (act.ide.currentFile) lines.push(`${indent}File: ${act.ide.filePath || act.ide.currentFile}`);
+    if (act.ide.language) lines.push(`${indent}Language: ${act.ide.language}`);
+    if (act.ide.projectName) lines.push(`${indent}Project: ${act.ide.projectName}`);
+    if (act.ide.gitBranch) lines.push(`${indent}Branch: ${act.ide.gitBranch}`);
+  }
+
+  if (act.terminal) {
+    if (act.terminal.cwd) lines.push(`${indent}CWD: ${act.terminal.cwd}`);
+    if (act.terminal.lastCommand) lines.push(`${indent}Command: ${act.terminal.lastCommand}`);
+  }
+
+  if (act.communication) {
+    if (act.communication.channel) lines.push(`${indent}Channel: ${act.communication.channel}`);
+    if (act.communication.recipient) lines.push(`${indent}With: ${act.communication.recipient}`);
+  }
+
+  if (act.document) {
+    if (act.document.documentTitle) lines.push(`${indent}Document: ${act.document.documentTitle}`);
+  }
+
+  if (act.summary) lines.push(`${indent}Summary: ${act.summary}`);
+  if (act.tags && act.tags.length > 0) lines.push(`${indent}Tags: ${act.tags.join(", ")}`);
+
+  return lines.join("\n");
+}
+
+function formatEntry(entry: ActivityEntry, verbose = false): string {
+  const lines: string[] = [];
+  const appName = entry.app?.name || entry.application;
+
+  lines.push(`[${entry.date} ${entry.time}] ${appName}${entry.isContinuation ? " (continuation)" : ""}`);
+  lines.push(`  File: ${entry.filename}`);
+
+  // If entry has activities array, show layered format
+  if (entry.activities && entry.activities.length > 0) {
+    for (const act of entry.activities) {
+      lines.push(formatActivityForCli(act, "    ", verbose));
+    }
+    if (entry.audioTranscription) {
+      lines.push(`  Audio: ${entry.audioTranscription}`);
+    }
+    return lines.join("\n");
+  }
+
+  // Fallback for old flat entries
+  lines.push(`  Activity: ${entry.activity}`);
+
+  if (entry.app?.windowTitle) {
+    lines.push(`  Window: ${entry.app.windowTitle}`);
+  }
+
+  if (entry.app?.bundleOrPath) {
+    lines.push(`  Path: ${entry.app.bundleOrPath}`);
+  }
+
+  // Browser details
+  if (entry.browser) {
+    if (entry.browser.url) lines.push(`  URL: ${entry.browser.url}`);
+    if (entry.browser.pageTitle) lines.push(`  Page: ${entry.browser.pageTitle}`);
+    if (entry.browser.pageType && entry.browser.pageType !== "other") {
+      lines.push(`  Type: ${entry.browser.pageType}`);
+    }
+  }
+
+  // Video details
+  if (entry.video) {
+    lines.push(`  Video: "${entry.video.title || "Unknown"}"`);
+    if (entry.video.channel) lines.push(`  Channel: ${entry.video.channel}`);
+    if (entry.video.duration) {
+      const position = entry.video.position ? `${entry.video.position} / ` : "";
+      lines.push(`  Duration: ${position}${entry.video.duration}`);
+    }
+    if (entry.video.state) lines.push(`  State: ${entry.video.state}`);
+  }
+
+  // IDE details
+  if (entry.ide) {
+    if (entry.ide.currentFile) {
+      const path = entry.ide.filePath || entry.ide.currentFile;
+      lines.push(`  File: ${path}`);
+    }
+    if (entry.ide.language) lines.push(`  Language: ${entry.ide.language}`);
+    if (entry.ide.projectName) lines.push(`  Project: ${entry.ide.projectName}`);
+    if (entry.ide.gitBranch) lines.push(`  Branch: ${entry.ide.gitBranch}`);
+  }
+
+  // Terminal details
+  if (entry.terminal) {
+    if (entry.terminal.cwd) lines.push(`  CWD: ${entry.terminal.cwd}`);
+    if (entry.terminal.lastCommand) lines.push(`  Command: ${entry.terminal.lastCommand}`);
+    if (entry.terminal.sshHost) lines.push(`  SSH: ${entry.terminal.sshHost}`);
+  }
+
+  // Communication details
+  if (entry.communication) {
+    if (entry.communication.channel) lines.push(`  Channel: ${entry.communication.channel}`);
+    if (entry.communication.recipient) lines.push(`  With: ${entry.communication.recipient}`);
+  }
+
+  // Document details
+  if (entry.document) {
+    if (entry.document.documentTitle) lines.push(`  Document: ${entry.document.documentTitle}`);
+    if (entry.document.documentType) lines.push(`  Type: ${entry.document.documentType}`);
+  }
+
+  // Summary (always show if available)
+  if (entry.summary) {
+    lines.push(`  Summary: ${entry.summary}`);
+  }
+
+  if (verbose && entry.details && entry.details !== entry.activity) {
+    lines.push(`  Details: ${entry.details}`);
+  }
+
+  if (entry.audioTranscription) {
+    lines.push(`  Audio: ${entry.audioTranscription}`);
+  }
+
+  lines.push(`  Tags: ${entry.tags.join(", ")}`);
+
+  return lines.join("\n");
+}
+
+async function processScreenshots(dataDir: string, limit?: number) {
+  console.log(`Processing screenshots from: ${dataDir}`);
+
+  const agent = await ActivityAgent.create({ dataDir });
+  const lastTimestamp = agent.getLastProcessedTimestamp();
+
+  let screenshots = getScreenshotsAfter(dataDir, lastTimestamp);
+
+  if (limit && limit > 0) {
+    screenshots = screenshots.slice(0, limit);
+  }
+
+  if (screenshots.length === 0) {
+    console.log("No new screenshots to process.");
+    return;
+  }
+
+  console.log(`Found ${screenshots.length} new screenshots to process.`);
+
+  let processed = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < screenshots.length; i++) {
+    const screenshot = screenshots[i];
+    console.log(`\n[${i + 1}/${screenshots.length}] Processing: ${screenshot.filename}`);
+
+    try {
+      const audioContext = await loadAudioContextForTimestamp(dataDir, screenshot.timestamp);
+      if (audioContext) {
+        console.log(`  🎙 Linked audio transcript #${audioContext.recordingId}`);
+      }
+
+      const entry = await agent.processScreenshot(screenshot, audioContext);
+      if (entry === null) {
+        console.log(`  ⏭ Skipped (similar to recent screenshot)`);
+        skipped++;
+      } else {
+        console.log(formatEntry(entry));
+        processed++;
+      }
+    } catch (error) {
+      console.error(`  Error: ${error}`);
+    }
+  }
+
+  console.log("\nDone processing.");
+  console.log(`  Processed: ${processed}, Skipped (duplicates): ${skipped}`);
+
+  // Show summary
+  const context = agent.getContext();
+  console.log(`\nTotal entries: ${context.entries.length}`);
+  if (context.recentSummary) {
+    console.log(`\nRecent summary: ${context.recentSummary}`);
+  }
+}
+
+async function showStatus(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const context = agent.getContext();
+
+  const allScreenshots = listScreenshots(dataDir);
+  const lastTimestamp = agent.getLastProcessedTimestamp();
+  const pending = lastTimestamp
+    ? allScreenshots.filter((s) => s.timestamp > lastTimestamp).length
+    : allScreenshots.length;
+
+  console.log(`Activity Agent Status`);
+  console.log(`====================`);
+  console.log(`Data directory: ${dataDir}`);
+  console.log(`Total screenshots: ${allScreenshots.length}`);
+  console.log(`Processed entries: ${context.entries.length}`);
+  console.log(`Pending: ${pending}`);
+
+  if (context.lastProcessed) {
+    console.log(`Last processed: ${context.lastProcessed}`);
+  }
+
+  // Show search index stats
+  const stats = agent.getSearchIndexStats();
+  if (stats) {
+    console.log(`\nSearch Index:`);
+    console.log(`  Indexed: ${stats.entries} entries`);
+    console.log(`  Apps: ${stats.apps}`);
+    console.log(`  Dates: ${stats.dates}`);
+    console.log(`  DB size: ${(stats.dbSizeBytes / 1024).toFixed(1)} KB`);
+  }
+
+  // Show phash stats
+  const phashStats = agent.getPhashStats();
+  console.log(`\nDuplicate Detection (pHash):`);
+  console.log(`  Hashes: ${phashStats.totalHashes}`);
+  console.log(`  Index size: ${(phashStats.indexSizeBytes / 1024).toFixed(1)} KB`);
+
+  if (context.recentSummary) {
+    console.log(`\nRecent summary:`);
+    console.log(context.recentSummary);
+  }
+
+  // Show last 5 entries
+  const recent = context.entries.slice(-5);
+  if (recent.length > 0) {
+    console.log(`\nLast ${recent.length} entries:`);
+    for (const entry of recent) {
+      console.log(formatEntry(entry));
+      console.log();
+    }
+  }
+}
+
+async function agentSearch(dataDir: string, query: string, debug = false) {
+  const agent = await ActivityAgent.create({ dataDir });
+
+  console.log(`Searching for: "${query}"${debug ? " (debug mode)" : ""}\n`);
+
+  const result = await agent.agentSearch(query, (event) => {
+    if (debug) {
+      if (event.type === "tool_start") {
+        console.log(`\n┌─ Tool: ${event.content}`);
+      } else if (event.type === "tool_args") {
+        console.log(`│  Args: ${event.content}`);
+      } else if (event.type === "tool_result") {
+        const lines = (event.content || "").split("\n").slice(0, 10);
+        console.log(`│  Result (${event.resultCount} entries):`);
+        for (const line of lines) {
+          console.log(`│    ${line}`);
+        }
+        if ((event.content || "").split("\n").length > 10) {
+          console.log(`│    ...`);
+        }
+        console.log(`└─ Done`);
+      } else if (event.type === "thinking") {
+        console.log(`\n💭 ${event.content}`);
+      }
+    } else {
+      if (event.type === "tool_start") {
+        process.stdout.write(`[${event.content}] `);
+      } else if (event.type === "tool_result") {
+        process.stdout.write("✓ ");
+      }
+    }
+  });
+
+  console.log("\n");
+  console.log(result.answer);
+}
+
+async function fastSearch(dataDir: string, query: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+
+  const startTime = Date.now();
+  const results = agent.searchFast(query);
+  const elapsed = Date.now() - startTime;
+
+  if (results.length === 0) {
+    console.log(`No results found for: "${query}"`);
+    return;
+  }
+
+  console.log(`Found ${results.length} results for: "${query}" (${elapsed}ms)\n`);
+
+  for (const entry of results) {
+    console.log(formatEntry(entry, true));
+    console.log();
+  }
+}
+
+async function keywordSearch(dataDir: string, query: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const results = agent.search(query);
+
+  if (results.length === 0) {
+    console.log(`No results found for: "${query}"`);
+    return;
+  }
+
+  console.log(`Found ${results.length} results for: "${query}"\n`);
+
+  for (const entry of results) {
+    console.log(formatEntry(entry, true));
+    console.log();
+  }
+}
+
+async function showDate(dataDir: string, date: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const entries = agent.getEntriesForDate(date);
+
+  if (entries.length === 0) {
+    console.log(`No entries found for: ${date}`);
+    return;
+  }
+
+  // Consolidate similar consecutive entries
+  const consolidated = consolidateEntries(entries);
+
+  console.log(`Activity for ${date} (${consolidated.length} activities from ${entries.length} screenshots)`);
+  console.log("=".repeat(50));
+
+  let currentApp = "";
+  for (const entry of consolidated) {
+    const appName = entry.app?.name || entry.application;
+    if (appName !== currentApp) {
+      currentApp = appName;
+      console.log(`\n## ${currentApp}`);
+    }
+
+    console.log(formatEntry(entry));
+    console.log();
+  }
+}
+
+/**
+ * Consolidate consecutive entries with similar activity into single entries.
+ * Keeps the first entry of each group.
+ */
+function consolidateEntries(entries: ActivityEntry[]): ActivityEntry[] {
+  if (entries.length === 0) return [];
+
+  const result: ActivityEntry[] = [];
+  let current = entries[0];
+
+  for (let i = 1; i < entries.length; i++) {
+    const next = entries[i];
+    
+    // Check if this is a continuation of the same activity
+    const sameApp = (current.app?.name || current.application) === (next.app?.name || next.application);
+    const sameUrl = current.browser?.url === next.browser?.url;
+    const similarActivity = isSimilarActivity(current.activity, next.activity);
+    
+    if (sameApp && (sameUrl || similarActivity)) {
+      // Skip this entry - it's a continuation
+      continue;
+    } else {
+      // Different activity - save current and move to next
+      result.push(current);
+      current = next;
+    }
+  }
+  
+  // Don't forget the last entry
+  result.push(current);
+  
+  return result;
+}
+
+/**
+ * Check if two activity descriptions are similar enough to be considered the same.
+ */
+function isSimilarActivity(a: string, b: string): boolean {
+  // Normalize and compare
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+  const na = normalize(a);
+  const nb = normalize(b);
+  
+  // If one contains the other, they're similar
+  if (na.includes(nb) || nb.includes(na)) return true;
+  
+  // Check word overlap
+  const wordsA = new Set(na.split(/\s+/).filter(w => w.length > 3));
+  const wordsB = new Set(nb.split(/\s+/).filter(w => w.length > 3));
+  
+  if (wordsA.size === 0 || wordsB.size === 0) return false;
+  
+  let overlap = 0;
+  for (const word of wordsA) {
+    if (wordsB.has(word)) overlap++;
+  }
+  
+  // If more than 50% of words overlap, consider them similar
+  const overlapRatio = overlap / Math.min(wordsA.size, wordsB.size);
+  return overlapRatio > 0.5;
+}
+
+async function processFeedback(dataDir: string, feedback: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+
+  console.log(`Processing feedback: "${feedback}"\n`);
+
+  const result = await agent.processFeedback(feedback);
+
+  if (result.success) {
+    console.log("✓ " + result.message);
+    if (result.rulesChanged) {
+      console.log("\nUpdated rules saved. Future indexing will use these rules.");
+    }
+  } else {
+    console.error("✗ " + result.message);
+  }
+}
+
+async function showRules(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  console.log(agent.showRules());
+}
+
+async function showHistory(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  console.log(agent.showHistory());
+}
+
+async function undoLastRuleChange(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const result = agent.undoLastChange();
+
+  if (result.success) {
+    console.log("✓ " + result.message);
+  } else {
+    console.error("✗ " + result.message);
+  }
+}
+
+async function reanalyzeScreenshots(
+  dataDir: string,
+  filter: 
+    | { type: "all" }
+    | { type: "date"; date: string }
+    | { type: "dateRange"; startDate: string; endDate: string }
+    | { type: "filenames"; filenames: string[] }
+) {
+  const agent = await ActivityAgent.create({ dataDir });
+
+  let filterDesc = "";
+  switch (filter.type) {
+    case "all":
+      filterDesc = "ALL entries";
+      break;
+    case "date":
+      filterDesc = `entries for ${filter.date}`;
+      break;
+    case "dateRange":
+      filterDesc = `entries from ${filter.startDate} to ${filter.endDate}`;
+      break;
+    case "filenames":
+      filterDesc = `${filter.filenames.length} specific file(s)`;
+      break;
+  }
+
+  console.log(`Re-analyzing ${filterDesc} with current indexing rules...\n`);
+
+  const result = await agent.reanalyzeEntries(filter, (event) => {
+    switch (event.status) {
+      case "start":
+        process.stdout.write(`[${event.current}/${event.total}] Analyzing: ${event.filename}...`);
+        break;
+      case "done":
+        console.log(" ✓");
+        break;
+      case "error":
+        console.log(` ✗ ${event.error}`);
+        break;
+      case "skipped":
+        console.log(`[${event.current}/${event.total}] Skipped: ${event.filename} (file missing)`);
+        break;
+    }
+  });
+
+  console.log(`\nReanalysis complete:`);
+  console.log(`  Total selected: ${result.total}`);
+  console.log(`  Reanalyzed: ${result.reanalyzed}`);
+  if (result.skipped > 0) console.log(`  Skipped (missing files): ${result.skipped}`);
+  if (result.failed > 0) console.log(`  Failed: ${result.failed}`);
+
+  const stats = agent.getSearchIndexStats();
+  if (stats) {
+    console.log(`\nSearch index: ${stats.entries} entries, ${(stats.dbSizeBytes / 1024).toFixed(1)} KB`);
+  }
+}
+
+async function syncIndex(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+
+  console.log("Syncing JSON context to SQLite search index...");
+  const result = agent.syncToSearchIndex();
+
+  console.log(`✓ Synced ${result.synced} new entries, skipped ${result.skipped} existing`);
+
+  const stats = agent.getSearchIndexStats();
+  if (stats) {
+    console.log(`\nSearch index stats:`);
+    console.log(`  Entries: ${stats.entries}`);
+    console.log(`  Apps: ${stats.apps}`);
+    console.log(`  Dates: ${stats.dates}`);
+    console.log(`  DB size: ${(stats.dbSizeBytes / 1024).toFixed(1)} KB`);
+  }
+}
+
+async function rebuildIndex(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+
+  console.log("Rebuilding SQLite search index from scratch...");
+  const count = agent.rebuildSearchIndex();
+
+  console.log(`✓ Rebuilt index with ${count} entries`);
+
+  const stats = agent.getSearchIndexStats();
+  if (stats) {
+    console.log(`\nSearch index stats:`);
+    console.log(`  Entries: ${stats.entries}`);
+    console.log(`  Apps: ${stats.apps}`);
+    console.log(`  Dates: ${stats.dates}`);
+    console.log(`  DB size: ${(stats.dbSizeBytes / 1024).toFixed(1)} KB`);
+  }
+}
+
+async function listApps(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const apps = agent.getApps();
+
+  if (apps.length === 0) {
+    console.log("No apps indexed yet.");
+    return;
+  }
+
+  console.log(`Indexed applications (${apps.length}):\n`);
+  for (const app of apps) {
+    const entries = agent.getEntriesByApp(app);
+    console.log(`  ${app} (${entries.length} entries)`);
+  }
+}
+
+async function chatMessage(dataDir: string, message: string, historyJson?: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  
+  // Parse history if provided
+  let history: Array<{ role: "user" | "assistant"; content: string }> = [];
+  if (historyJson) {
+    try {
+      history = JSON.parse(historyJson);
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+  
+  const response = await agent.chat(message, history, (event) => {
+    if (event.type === "tool_start") {
+      process.stdout.write(`[${event.content}] `);
+    } else if (event.type === "tool_end") {
+      process.stdout.write("✓ ");
+    }
+  });
+  
+  console.log("\n" + response);
+}
+
+// ============================================================
+// User Profile Commands
+// ============================================================
+
+async function showProfile(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const profile = agent.getProfile();
+  
+  console.log(profile);
+  
+  // Show last update info
+  const lastUpdate = agent.getLastProfileUpdateTimestamp();
+  if (lastUpdate) {
+    const lastUpdateDate = new Date(lastUpdate);
+    const timeSince = Date.now() - lastUpdateDate.getTime();
+    const hoursSince = Math.round(timeSince / (1000 * 60 * 60));
+    console.log(`\n---`);
+    console.log(`Last updated: ${lastUpdateDate.toLocaleString()} (${hoursSince} hours ago)`);
+    
+    if (agent.isProfileUpdateDue(1)) {
+      console.log(`💡 Profile update is due. Run: activity-agent profile-update`);
+    }
+  }
+}
+
+async function updateProfile(dataDir: string, hoursBack: number) {
+  const agent = await ActivityAgent.create({ dataDir });
+  
+  console.log(`Updating profile based on last ${hoursBack} hour(s) of activity...`);
+  
+  const result = await agent.updateProfile(hoursBack);
+  
+  if (result.success) {
+    if (result.changed) {
+      console.log(`✓ Profile updated! (analyzed ${result.entriesAnalyzed} activities)`);
+      console.log(`  Summary: ${result.summary}`);
+      console.log(`\nView with: activity-agent profile`);
+    } else {
+      console.log(`ℹ No changes made. ${result.summary}`);
+      console.log(`  (analyzed ${result.entriesAnalyzed} activities)`);
+    }
+  } else {
+    console.error(`✗ Failed to update profile: ${result.summary}`);
+  }
+}
+
+async function updateProfileForRange(dataDir: string, startDate: string, endDate: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  
+  console.log(`Updating profile based on activities from ${startDate} to ${endDate}...`);
+  
+  const result = await agent.updateProfileForDateRange(startDate, endDate);
+  
+  if (result.success) {
+    if (result.changed) {
+      console.log(`✓ Profile updated! (analyzed ${result.entriesAnalyzed} activities)`);
+      console.log(`  Summary: ${result.summary}`);
+      console.log(`\nView with: activity-agent profile`);
+    } else {
+      console.log(`ℹ No changes made. ${result.summary}`);
+      console.log(`  (analyzed ${result.entriesAnalyzed} activities)`);
+    }
+  } else {
+    console.error(`✗ Failed to update profile: ${result.summary}`);
+  }
+}
+
+async function rebuildProfile(dataDir: string) {
+  const agent = await ActivityAgent.create({ dataDir });
+  
+  const context = agent.getContext();
+  const totalEntries = context.entries.length;
+  
+  if (totalEntries === 0) {
+    console.log("No entries to build profile from.");
+    return;
+  }
+
+  console.log(`Rebuilding profile from scratch (${totalEntries} entries)...`);
+  
+  const result = await agent.rebuildProfile();
+  
+  if (result.success) {
+    console.log(`✓ Profile rebuilt from ${result.entriesAnalyzed} entries.`);
+    console.log(`  ${result.summary}`);
+    console.log(`\nView with: activity-agent profile`);
+  } else {
+    console.error(`✗ ${result.summary}`);
+  }
+}
+
+async function showProfileHistory(dataDir: string, count: number) {
+  const agent = await ActivityAgent.create({ dataDir });
+  console.log(agent.formatProfileHistory(count));
+}
+
+async function restoreProfile(dataDir: string, index: number) {
+  const agent = await ActivityAgent.create({ dataDir });
+  const result = agent.restoreProfileFromHistory(index);
+  
+  if (result.success) {
+    console.log(`✓ ${result.message}`);
+    console.log(`\nView restored profile with: activity-agent profile`);
+  } else {
+    console.error(`✗ ${result.message}`);
+  }
+}
+
+main().catch((error) => {
+  console.error("Error:", error);
+  process.exit(1);
+});

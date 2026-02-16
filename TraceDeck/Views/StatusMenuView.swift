@@ -1,0 +1,84 @@
+//
+//  StatusMenuView.swift
+//  TraceDeck
+//
+
+import SwiftUI
+
+struct StatusMenuView: View {
+    @ObservedObject private var appState = AppState.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Recording toggle at top
+            HStack {
+                Toggle(isOn: $appState.isRecording) {
+                    Label(
+                        appState.isRecording ? "Recording" : "Paused",
+                        systemImage: appState.isRecording ? "record.circle.fill" : "pause.circle"
+                    )
+                }
+                .toggleStyle(.switch)
+                Spacer()
+                Circle()
+                    .fill(appState.isRecording ? Color.red : Color.gray)
+                    .frame(width: 8, height: 8)
+            }
+
+            // Stats in one row
+            HStack {
+                Text("Today:")
+                    .foregroundColor(.secondary)
+                Text("\(appState.todayScreenshotCount)")
+                Spacer()
+                Text("Storage:")
+                    .foregroundColor(.secondary)
+                Text(formatBytes(StorageManager.shared.totalStorageUsed()))
+            }
+            .font(.caption)
+
+            Divider()
+
+            // Actions
+            HStack {
+                Button("Open Window") {
+                    // Set activation policy to regular (allows window focus)
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+
+                    // Find and show the main window
+                    for window in NSApp.windows {
+                        if window.title == AppIdentity.displayName || window.styleMask.contains(.titled) {
+                            window.makeKeyAndOrderFront(nil)
+                            window.orderFrontRegardless()
+                            break
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button("Quit") {
+                    NSApp.terminate(nil)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding()
+        .frame(width: 260)
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let mb = Double(bytes) / 1_048_576
+        if mb < 1024 {
+            return String(format: "%.1f MB", mb)
+        } else {
+            return String(format: "%.2f GB", mb / 1024)
+        }
+    }
+}
+
+#Preview {
+    StatusMenuView()
+}
