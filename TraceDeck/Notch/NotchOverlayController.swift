@@ -497,6 +497,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
+        NSLog("[NotchClick] mouseDown at (%.0f, %.0f) isFlipped=%d", location.x, location.y, isFlipped ? 1 : 0)
 
         // Search icon click — always available
         if searchIcon.frame.insetBy(dx: -6, dy: -6).contains(location) {
@@ -537,7 +538,9 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         }
 
         let playFrame = playChip.convert(playChip.bounds, to: self)
+        NSLog("[NotchClick] playChip frame: (%.0f,%.0f,%.0f,%.0f) contains=%d", playFrame.origin.x, playFrame.origin.y, playFrame.width, playFrame.height, playFrame.contains(location) ? 1 : 0)
         if playFrame.contains(location) {
+            NSLog("[NotchClick] play button hit!")
             onToggleRecording?()
             return
         }
@@ -1019,9 +1022,13 @@ final class NotchOverlayController {
         // Wire callbacks
         contentView.onToggleRecording = {
             // Check screen recording permission before starting
-            if !AppState.shared.isRecording && !PermissionsManager.isScreenRecordingGranted {
-                // Request permission and show onboarding
+            let hasPermission = PermissionsManager.isScreenRecordingGranted
+            NSLog("[NotchRecord] toggle recording, isRecording=%d, hasPermission=%d", AppState.shared.isRecording ? 1 : 0, hasPermission ? 1 : 0)
+            if !AppState.shared.isRecording && !hasPermission {
+                NSLog("[NotchRecord] requesting screen recording permission")
                 PermissionsManager.requestScreenRecording()
+                // Open the main window so the onboarding sheet has somewhere to attach
+                NSApp.activate(ignoringOtherApps: true)
                 NotificationCenter.default.post(name: .showPermissionsOnboarding, object: nil)
                 return
             }

@@ -24,6 +24,80 @@ enum AudioTranscriptionStatus: String, Sendable {
     case noModel = "no_model"
 }
 
+// MARK: - Workflow Session Model
+
+struct WorkflowSession: Sendable, Identifiable, FetchableRecord, PersistableRecord {
+    var id: Int64?
+    var startedAt: Int
+    var endedAt: Int?
+    var note: String?
+    var summary: String?
+    var liveTranscript: String?
+    var transcriptUpdatedAt: Int?
+
+    static let databaseTableName = "workflow_sessions"
+
+    enum Columns: String, ColumnExpression {
+        case id
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case note
+        case summary
+        case liveTranscript = "live_transcript"
+        case transcriptUpdatedAt = "transcript_updated_at"
+    }
+
+    func encode(to container: inout PersistenceContainer) {
+        container["id"] = id
+        container["started_at"] = startedAt
+        container["ended_at"] = endedAt
+        container["note"] = note
+        container["summary"] = summary
+        container["live_transcript"] = liveTranscript
+        container["transcript_updated_at"] = transcriptUpdatedAt
+    }
+
+    init(row: Row) {
+        id = row["id"]
+        startedAt = row["started_at"]
+        endedAt = row["ended_at"]
+        note = row["note"]
+        summary = row["summary"]
+        liveTranscript = row["live_transcript"]
+        transcriptUpdatedAt = row["transcript_updated_at"]
+    }
+
+    init(
+        id: Int64? = nil,
+        startedAt: Date,
+        endedAt: Date? = nil,
+        note: String? = nil,
+        summary: String? = nil,
+        liveTranscript: String? = nil,
+        transcriptUpdatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.startedAt = Int(startedAt.timeIntervalSince1970)
+        self.endedAt = endedAt.map { Int($0.timeIntervalSince1970) }
+        self.note = note
+        self.summary = summary
+        self.liveTranscript = liveTranscript
+        self.transcriptUpdatedAt = transcriptUpdatedAt.map { Int($0.timeIntervalSince1970) }
+    }
+
+    var startedDate: Date {
+        Date(timeIntervalSince1970: TimeInterval(startedAt))
+    }
+
+    var endedDate: Date? {
+        endedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+
+    var isActive: Bool {
+        endedAt == nil
+    }
+}
+
 // MARK: - Screenshot Model
 
 struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
@@ -33,6 +107,7 @@ struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
     var fileSize: Int?
     var isProcessed: Bool
     var triggerReason: String
+    var sessionId: Int64?
 
     static let databaseTableName = "screenshots"
 
@@ -43,6 +118,7 @@ struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
         case fileSize = "file_size"
         case isProcessed = "is_processed"
         case triggerReason = "trigger_reason"
+        case sessionId = "session_id"
     }
 
     func encode(to container: inout PersistenceContainer) {
@@ -52,6 +128,7 @@ struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
         container["file_size"] = fileSize
         container["is_processed"] = isProcessed ? 1 : 0
         container["trigger_reason"] = triggerReason
+        container["session_id"] = sessionId
     }
 
     init(row: Row) {
@@ -61,6 +138,7 @@ struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
         fileSize = row["file_size"]
         isProcessed = (row["is_processed"] as Int?) == 1
         triggerReason = row["trigger_reason"] ?? TriggerReason.timer.rawValue
+        sessionId = row["session_id"]
     }
 
     init(
@@ -69,7 +147,8 @@ struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
         filePath: String,
         fileSize: Int? = nil,
         isProcessed: Bool = false,
-        triggerReason: TriggerReason = .timer
+        triggerReason: TriggerReason = .timer,
+        sessionId: Int64? = nil
     ) {
         self.id = id
         self.capturedAt = Int(capturedAt.timeIntervalSince1970)
@@ -77,6 +156,7 @@ struct Screenshot: Sendable, Identifiable, FetchableRecord, PersistableRecord {
         self.fileSize = fileSize
         self.isProcessed = isProcessed
         self.triggerReason = triggerReason.rawValue
+        self.sessionId = sessionId
     }
 
     var capturedDate: Date {
@@ -98,6 +178,7 @@ struct AudioRecording: Sendable, Identifiable, FetchableRecord, PersistableRecor
     var fileSize: Int?
     var transcription: String?
     var transcriptionStatus: String
+    var sessionId: Int64?
 
     static let databaseTableName = "audio_recordings"
 
@@ -109,6 +190,7 @@ struct AudioRecording: Sendable, Identifiable, FetchableRecord, PersistableRecor
         case fileSize = "file_size"
         case transcription
         case transcriptionStatus = "transcription_status"
+        case sessionId = "session_id"
     }
 
     func encode(to container: inout PersistenceContainer) {
@@ -119,6 +201,7 @@ struct AudioRecording: Sendable, Identifiable, FetchableRecord, PersistableRecor
         container["file_size"] = fileSize
         container["transcription"] = transcription
         container["transcription_status"] = transcriptionStatus
+        container["session_id"] = sessionId
     }
 
     init(row: Row) {
@@ -129,6 +212,7 @@ struct AudioRecording: Sendable, Identifiable, FetchableRecord, PersistableRecor
         fileSize = row["file_size"]
         transcription = row["transcription"]
         transcriptionStatus = row["transcription_status"] ?? AudioTranscriptionStatus.pending.rawValue
+        sessionId = row["session_id"]
     }
 
     init(
@@ -138,7 +222,8 @@ struct AudioRecording: Sendable, Identifiable, FetchableRecord, PersistableRecor
         filePath: String,
         fileSize: Int? = nil,
         transcription: String? = nil,
-        transcriptionStatus: AudioTranscriptionStatus = .pending
+        transcriptionStatus: AudioTranscriptionStatus = .pending,
+        sessionId: Int64? = nil
     ) {
         self.id = id
         self.startedAt = Int(startedAt.timeIntervalSince1970)
@@ -147,6 +232,7 @@ struct AudioRecording: Sendable, Identifiable, FetchableRecord, PersistableRecor
         self.fileSize = fileSize
         self.transcription = transcription
         self.transcriptionStatus = transcriptionStatus.rawValue
+        self.sessionId = sessionId
     }
 
     var startedDate: Date {
@@ -236,6 +322,26 @@ final class StorageManager: @unchecked Sendable {
     // MARK: - Migration
 
     private func migrate() {
+        // Each migration step runs independently so one failure doesn't block others.
+
+        // 1. Create workflow_sessions table
+        try? db.write { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS workflow_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at INTEGER NOT NULL,
+                    ended_at INTEGER,
+                    note TEXT,
+                    summary TEXT,
+                    live_transcript TEXT,
+                    transcript_updated_at INTEGER
+                )
+            """)
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_workflow_started_at ON workflow_sessions(started_at)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_workflow_ended_at ON workflow_sessions(ended_at)")
+        }
+
+        // 2. Create screenshots table
         try? db.write { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS screenshots (
@@ -244,18 +350,30 @@ final class StorageManager: @unchecked Sendable {
                     file_path TEXT NOT NULL,
                     file_size INTEGER,
                     is_processed INTEGER DEFAULT 0,
-                    trigger_reason TEXT DEFAULT 'timer'
-                );
-                CREATE INDEX IF NOT EXISTS idx_screenshots_captured_at ON screenshots(captured_at);
-                CREATE INDEX IF NOT EXISTS idx_screenshots_processed ON screenshots(is_processed);
-                CREATE INDEX IF NOT EXISTS idx_screenshots_trigger ON screenshots(trigger_reason);
+                    trigger_reason TEXT DEFAULT 'timer',
+                    session_id INTEGER
+                )
             """)
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_screenshots_captured_at ON screenshots(captured_at)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_screenshots_processed ON screenshots(is_processed)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_screenshots_trigger ON screenshots(trigger_reason)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_screenshots_session ON screenshots(session_id)")
+        }
 
-            let screenshotColumns = try db.columns(in: "screenshots").map { $0.name }
-            if !screenshotColumns.contains("trigger_reason") {
+        // 3. Migrate screenshots columns
+        try? db.write { db in
+            let cols = try db.columns(in: "screenshots").map { $0.name }
+            if !cols.contains("trigger_reason") {
                 try db.execute(sql: "ALTER TABLE screenshots ADD COLUMN trigger_reason TEXT DEFAULT 'timer'")
             }
+            if !cols.contains("session_id") {
+                try db.execute(sql: "ALTER TABLE screenshots ADD COLUMN session_id INTEGER")
+                try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_screenshots_session ON screenshots(session_id)")
+            }
+        }
 
+        // 4. Create audio_recordings table
+        try? db.write { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS audio_recordings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,16 +382,25 @@ final class StorageManager: @unchecked Sendable {
                     file_path TEXT NOT NULL,
                     file_size INTEGER,
                     transcription TEXT,
-                    transcription_status TEXT DEFAULT 'pending'
-                );
-                CREATE INDEX IF NOT EXISTS idx_audio_started_at ON audio_recordings(started_at);
-                CREATE INDEX IF NOT EXISTS idx_audio_ended_at ON audio_recordings(ended_at);
-                CREATE INDEX IF NOT EXISTS idx_audio_status ON audio_recordings(transcription_status);
+                    transcription_status TEXT DEFAULT 'pending',
+                    session_id INTEGER
+                )
             """)
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_audio_started_at ON audio_recordings(started_at)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_audio_ended_at ON audio_recordings(ended_at)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_audio_status ON audio_recordings(transcription_status)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_audio_session ON audio_recordings(session_id)")
+        }
 
-            let audioColumns = try db.columns(in: "audio_recordings").map { $0.name }
-            if !audioColumns.contains("transcription_status") {
+        // 5. Migrate audio_recordings columns
+        try? db.write { db in
+            let cols = try db.columns(in: "audio_recordings").map { $0.name }
+            if !cols.contains("transcription_status") {
                 try db.execute(sql: "ALTER TABLE audio_recordings ADD COLUMN transcription_status TEXT DEFAULT 'pending'")
+            }
+            if !cols.contains("session_id") {
+                try db.execute(sql: "ALTER TABLE audio_recordings ADD COLUMN session_id INTEGER")
+                try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_audio_session ON audio_recordings(session_id)")
             }
         }
     }
@@ -294,10 +421,142 @@ final class StorageManager: @unchecked Sendable {
         audioRoot.appendingPathComponent(timestampFilename(startedAt, ext: "wav"))
     }
 
+    // MARK: - Workflow Sessions
+
+    @discardableResult
+    func startWorkflowSession(startedAt: Date = Date(), note: String? = nil) -> Int64? {
+        let normalizedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var session = WorkflowSession(
+            startedAt: startedAt,
+            endedAt: nil,
+            note: normalizedNote?.isEmpty == false ? normalizedNote : nil
+        )
+        do {
+            try db.write { db in
+                try session.insert(db)
+            }
+            return session.id
+        } catch {
+            print("Failed to create workflow session: \(error)")
+            return nil
+        }
+    }
+
+    func endWorkflowSession(
+        id: Int64,
+        endedAt: Date = Date(),
+        summary: String? = nil,
+        liveTranscript: String? = nil
+    ) {
+        let normalizedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTranscript = liveTranscript?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? db.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE workflow_sessions
+                    SET ended_at = ?,
+                        summary = COALESCE(?, summary),
+                        live_transcript = COALESCE(?, live_transcript),
+                        transcript_updated_at = CASE
+                            WHEN ? IS NOT NULL THEN ?
+                            ELSE transcript_updated_at
+                        END
+                    WHERE id = ?
+                """,
+                arguments: [
+                    Int(endedAt.timeIntervalSince1970),
+                    normalizedSummary?.isEmpty == false ? normalizedSummary : nil,
+                    normalizedTranscript?.isEmpty == false ? normalizedTranscript : nil,
+                    normalizedTranscript?.isEmpty == false ? 1 : nil,
+                    Int(endedAt.timeIntervalSince1970),
+                    id
+                ]
+            )
+        }
+    }
+
+    func updateWorkflowSessionNote(id: Int64, note: String?) {
+        let normalized = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? db.write { db in
+            try db.execute(
+                sql: "UPDATE workflow_sessions SET note = ? WHERE id = ?",
+                arguments: [normalized?.isEmpty == false ? normalized : nil, id]
+            )
+        }
+    }
+
+    func updateWorkflowSessionSummary(id: Int64, summary: String?) {
+        let normalized = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? db.write { db in
+            try db.execute(
+                sql: "UPDATE workflow_sessions SET summary = ? WHERE id = ?",
+                arguments: [normalized?.isEmpty == false ? normalized : nil, id]
+            )
+        }
+    }
+
+    func upsertWorkflowSessionTranscript(
+        id: Int64,
+        transcript: String?,
+        updatedAt: Date = Date()
+    ) {
+        let normalized = transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? db.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE workflow_sessions
+                    SET live_transcript = ?, transcript_updated_at = ?
+                    WHERE id = ?
+                """,
+                arguments: [
+                    normalized?.isEmpty == false ? normalized : nil,
+                    Int(updatedAt.timeIntervalSince1970),
+                    id
+                ]
+            )
+        }
+    }
+
+    func activeWorkflowSession() -> WorkflowSession? {
+        try? db.read { db in
+            try WorkflowSession
+                .filter(WorkflowSession.Columns.endedAt == nil)
+                .order(WorkflowSession.Columns.startedAt.desc)
+                .fetchOne(db)
+        }
+    }
+
+    func fetchWorkflowSessionsForDateRange(from: Date, to: Date) -> [WorkflowSession] {
+        let fromTs = Int(from.timeIntervalSince1970)
+        let toTs = Int(to.timeIntervalSince1970)
+
+        return (try? db.read { db in
+            try WorkflowSession
+                .filter(
+                    WorkflowSession.Columns.startedAt <= toTs &&
+                    (WorkflowSession.Columns.endedAt == nil || WorkflowSession.Columns.endedAt >= fromTs)
+                )
+                .order(WorkflowSession.Columns.startedAt.desc)
+                .fetchAll(db)
+        }) ?? []
+    }
+
+    func fetchWorkflowSessionsForDay(_ date: Date) -> [WorkflowSession] {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        return fetchWorkflowSessionsForDateRange(from: startOfDay, to: endOfDay)
+    }
+
     // MARK: - Save Screenshot
 
     @discardableResult
-    func saveScreenshot(url: URL, capturedAt: Date, reason: TriggerReason = .timer) -> Int64? {
+    func saveScreenshot(
+        url: URL,
+        capturedAt: Date,
+        reason: TriggerReason = .timer,
+        sessionID: Int64? = nil
+    ) -> Int64? {
         let fileSize = (try? fileManager.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
 
         var screenshot = Screenshot(
@@ -305,7 +564,8 @@ final class StorageManager: @unchecked Sendable {
             filePath: url.path,
             fileSize: fileSize,
             isProcessed: false,
-            triggerReason: reason
+            triggerReason: reason,
+            sessionId: sessionID
         )
 
         do {
@@ -327,7 +587,8 @@ final class StorageManager: @unchecked Sendable {
         startedAt: Date,
         endedAt: Date,
         transcription: String? = nil,
-        status: AudioTranscriptionStatus = .pending
+        status: AudioTranscriptionStatus = .pending,
+        sessionID: Int64? = nil
     ) -> Int64? {
         let fileSize = (try? fileManager.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         var recording = AudioRecording(
@@ -336,7 +597,8 @@ final class StorageManager: @unchecked Sendable {
             filePath: url.path,
             fileSize: fileSize,
             transcription: transcription,
-            transcriptionStatus: status
+            transcriptionStatus: status,
+            sessionId: sessionID
         )
 
         do {
@@ -416,6 +678,23 @@ final class StorageManager: @unchecked Sendable {
         return fetchByDateRange(from: startOfDay, to: endOfDay)
     }
 
+    func fetchScreenshots(forSessionID sessionID: Int64, limit: Int? = nil) -> [Screenshot] {
+        (try? db.read { db in
+            if let limit {
+                let recent = try Screenshot
+                    .filter(Screenshot.Columns.sessionId == sessionID)
+                    .order(Screenshot.Columns.capturedAt.desc)
+                    .limit(limit)
+                    .fetchAll(db)
+                return recent.reversed()
+            }
+            return try Screenshot
+                .filter(Screenshot.Columns.sessionId == sessionID)
+                .order(Screenshot.Columns.capturedAt.asc)
+                .fetchAll(db)
+        }) ?? []
+    }
+
     // MARK: - Fetch Audio
 
     func fetchAudioForDateRange(from: Date, to: Date) -> [AudioRecording] {
@@ -426,6 +705,15 @@ final class StorageManager: @unchecked Sendable {
             try AudioRecording
                 .filter(AudioRecording.Columns.startedAt <= toTs && AudioRecording.Columns.endedAt >= fromTs)
                 .order(AudioRecording.Columns.startedAt.desc)
+                .fetchAll(db)
+        }) ?? []
+    }
+
+    func fetchAudioRecordings(forSessionID sessionID: Int64) -> [AudioRecording] {
+        (try? db.read { db in
+            try AudioRecording
+                .filter(AudioRecording.Columns.sessionId == sessionID)
+                .order(AudioRecording.Columns.startedAt.asc)
                 .fetchAll(db)
         }) ?? []
     }
