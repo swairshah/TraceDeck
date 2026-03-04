@@ -105,13 +105,16 @@ private final class FlippedView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+// MARK: - Content View
+
 private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // Callbacks — controller wires these up
     var onToggleRecording: (() -> Void)?
     var onSessionNoteChanged: ((String) -> Void)?
-    var onSearchToggled: (() -> Void)?
+    var onSearchIconClicked: (() -> Void)?
     var onSearchSubmitted: ((String) -> Void)?
 
     @objc dynamic var shapeMorphProgress: CGFloat {
@@ -127,14 +130,16 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     private let shapeMask = CAShapeLayer()
     private var internalShapeMorphProgress: CGFloat = 1
 
+    // Top bar
     private var dotView: NSView!
+    private var searchIcon: NSImageView!
     private var timerDisplay: NSTextField!
     private var timerHovered = false
     private var timerTrackingArea: NSTrackingArea?
 
+    // Expanded recording panel
     private var gearIcon: NSImageView!
     private var expandedPanel: NSView!
-
     private var timerRow: NSView!
     private var durationChip: NSView!
     private var durationLabel: NSTextField!
@@ -144,14 +149,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     private var stopChip: NSView!
     private var stopIcon: NSImageView!
 
-    private var isRecording = false
-    private var recordingStartedAt: Date?
-    private var elapsedTimer: Timer?
-    private var hasNotch = false
-
-    // Search mode
-    private(set) var isSearchMode = false
-    private var searchIcon: NSImageView!
+    // Search panel (replaces expandedPanel when in search mode)
     private var searchPanel: NSView!
     private var searchRow: NSView!
     private var searchField: NSTextField!
@@ -159,6 +157,12 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     private var searchResultsScroll: NSScrollView!
     private var searchResultsStack: NSStackView!
     private var searchPlaceholder: NSTextField!
+
+    private var isRecording = false
+    private var recordingStartedAt: Date?
+    private var elapsedTimer: Timer?
+    private var hasNotch = false
+    private(set) var isSearchMode = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -178,15 +182,17 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         elapsedTimer?.invalidate()
     }
 
+    // MARK: Build UI
+
     private func buildUI() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-
         shapeMask.fillColor = NSColor.white.cgColor
         layer?.mask = shapeMask
 
         buildTopBar()
-        buildExpandedPanel()
+        buildRecordingPanel()
+        buildSearchPanel()
         update(recording: AppState.shared.isRecording)
     }
 
@@ -209,7 +215,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         addSubview(timerDisplay)
     }
 
-    private func buildExpandedPanel() {
+    private func buildRecordingPanel() {
         if let image = sfImage("gearshape", size: 14, weight: .medium) {
             gearIcon = NSImageView(image: image)
             gearIcon.contentTintColor = NotchOverlayConstants.dimText
@@ -224,11 +230,6 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         expandedPanel.alphaValue = 0
         addSubview(expandedPanel)
 
-        buildControlRow()
-        buildSearchPanel()
-    }
-
-    private func buildControlRow() {
         timerRow = roundedBox(NotchOverlayConstants.sectionColor, radius: NotchOverlayConstants.sectionRadius)
         expandedPanel.addSubview(timerRow)
 
@@ -286,7 +287,6 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchPanel.isHidden = true
         addSubview(searchPanel)
 
-        // Search input row
         searchRow = roundedBox(NotchOverlayConstants.sectionColor, radius: NotchOverlayConstants.sectionRadius)
         searchPanel.addSubview(searchRow)
 
@@ -315,18 +315,13 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchSpinner.isDisplayedWhenStopped = false
         searchRow.addSubview(searchSpinner)
 
-        // Results scroll area
         searchResultsStack = NSStackView()
         searchResultsStack.orientation = .vertical
         searchResultsStack.alignment = .leading
-        searchResultsStack.spacing = 2
-
-        let clipView = NSClipView()
-        clipView.documentView = searchResultsStack
-        clipView.drawsBackground = false
+        searchResultsStack.spacing = 4
 
         searchResultsScroll = NSScrollView()
-        searchResultsScroll.contentView = clipView
+        searchResultsScroll.documentView = searchResultsStack
         searchResultsScroll.hasVerticalScroller = true
         searchResultsScroll.hasHorizontalScroller = false
         searchResultsScroll.autohidesScrollers = true
@@ -334,11 +329,12 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchResultsScroll.scrollerStyle = .overlay
         searchPanel.addSubview(searchResultsScroll)
 
-        // Placeholder text
         searchPlaceholder = makeLabel("Type a query and press Enter", size: 12, weight: .regular, color: NotchOverlayConstants.dimText)
         searchPlaceholder.alignment = .center
         searchPanel.addSubview(searchPlaceholder)
     }
+
+    // MARK: Layout
 
     override func layout() {
         super.layout()
@@ -351,12 +347,12 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let barHeight = NotchOverlayConstants.collapsedHeight(hasNotch: hasNotch)
         let horizontalPadding: CGFloat = 26
         let widthDiff = width - NotchOverlayConstants.collapsedWidth
-        let edgeOffset = widthDiff / 2
+        let edgeOffset = max(widthDiff / 2, 0)
 
+        // Top bar
         let dotSize: CGFloat = 10
         dotView.frame = NSRect(x: horizontalPadding + edgeOffset, y: (barHeight - dotSize) / 2, width: dotSize, height: dotSize)
 
-        // Search icon — between dot and timer
         let searchIconSize: CGFloat = 14
         searchIcon.frame = NSRect(
             x: dotView.frame.maxX + 12,
@@ -371,22 +367,22 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             y: (barHeight - timerDisplay.frame.height) / 2
         )
 
-        let panelX: CGFloat = 28
-        let panelY: CGFloat = barHeight + 18
-
         gearIcon.frame = NSRect(x: width - 20 - edgeOffset + 8, y: (barHeight - 16) / 2, width: 16, height: 16)
 
+        // Panels
+        let panelX: CGFloat = 20
+        let panelY: CGFloat = barHeight + 14
         let panelWidth = width - panelX * 2
-        let panelHeight = bounds.height - panelY - 12
-        expandedPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
-        layoutControlRow(panelWidth)
+        let panelHeight = max(bounds.height - panelY - 10, 0)
 
-        // Search panel occupies the same space as expandedPanel but is taller
+        expandedPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
+        layoutRecordingRow(panelWidth)
+
         searchPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
-        layoutSearchPanel(panelWidth, height: panelHeight)
+        layoutSearchPanel(panelWidth, panelHeight)
     }
 
-    private func layoutControlRow(_ panelWidth: CGFloat) {
+    private func layoutRecordingRow(_ panelWidth: CGFloat) {
         let rowHeight: CGFloat = 46
         timerRow.frame = NSRect(x: 0, y: 0, width: panelWidth, height: rowHeight)
 
@@ -418,7 +414,9 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         stopIcon.frame = NSRect(x: (buttonSize - 14) / 2, y: (buttonSize - 14) / 2, width: 14, height: 14)
     }
 
-    private func layoutSearchPanel(_ panelWidth: CGFloat, height panelHeight: CGFloat) {
+    private func layoutSearchPanel(_ panelWidth: CGFloat, _ panelHeight: CGFloat) {
+        guard !searchPanel.isHidden else { return }
+
         let rowHeight: CGFloat = 40
         let inset: CGFloat = 10
         let gap: CGFloat = 8
@@ -434,18 +432,17 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         )
 
         let fieldX: CGFloat = inset + 4
-        let fieldWidth = panelWidth - fieldX - inset - (searchSpinner.isHidden ? 0 : spinnerSize + 4) - 4
+        let fieldWidth = panelWidth - fieldX - inset - spinnerSize - 8
         searchField.frame = NSRect(x: fieldX, y: (rowHeight - 20) / 2, width: max(fieldWidth, 40), height: 20)
 
         let resultsY = rowHeight + gap
         let resultsHeight = max(panelHeight - resultsY, 0)
         searchResultsScroll.frame = NSRect(x: 0, y: resultsY, width: panelWidth, height: resultsHeight)
 
-        // Size the stack to fill scroll width
-        searchResultsStack.frame = NSRect(x: 0, y: 0, width: panelWidth, height: max(searchResultsStack.fittingSize.height, resultsHeight))
-
-        searchPlaceholder.frame = NSRect(x: 0, y: resultsY + resultsHeight / 2 - 10, width: panelWidth, height: 20)
+        searchPlaceholder.frame = NSRect(x: 0, y: resultsY + max(resultsHeight / 2 - 10, 0), width: panelWidth, height: 20)
     }
+
+    // MARK: Bezel shape
 
     private func bezelPath(in rect: CGRect, morph: CGFloat) -> CGPath {
         _ = morph
@@ -479,19 +476,27 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         return path
     }
 
+    // MARK: Mouse / Keyboard
+
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
 
-        // Search icon click
+        // Search icon click — always available
         if searchIcon.frame.insetBy(dx: -6, dy: -6).contains(location) {
-            if isSearchMode {
-                exitSearchMode()
-            } else {
-                onSearchToggled?()
+            onSearchIconClicked?()
+            return
+        }
+
+        // If in search mode, only handle search-related clicks
+        if isSearchMode {
+            let fieldFrame = searchField.convert(searchField.bounds, to: self)
+            if fieldFrame.contains(location) {
+                window?.makeFirstResponder(searchField)
             }
             return
         }
 
+        // Recording controls
         if dotView.frame.insetBy(dx: -5, dy: -5).contains(location) {
             onToggleRecording?()
             return
@@ -499,17 +504,6 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
         if timerDisplay.frame.insetBy(dx: -5, dy: -5).contains(location) {
             onToggleRecording?()
-            return
-        }
-
-        // In search mode, clicking the search field focuses it
-        if isSearchMode {
-            let fieldFrame = searchField.convert(searchField.bounds, to: self)
-            if fieldFrame.contains(location) {
-                window?.makeFirstResponder(searchField)
-                return
-            }
-            // Click outside search field but inside panel — do nothing
             return
         }
 
@@ -554,8 +548,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         }
         if commandSelector == #selector(cancelOperation(_:)) {
             if isSearchMode {
-                exitSearchMode()
-                onSearchToggled?()
+                onSearchIconClicked?()  // toggle out of search
                 return true
             }
         }
@@ -563,17 +556,13 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField else { return }
-        if field === taskLabel {
-            onSessionNoteChanged?(taskLabel.stringValue)
-        }
+        guard let field = obj.object as? NSTextField, field === taskLabel else { return }
+        onSessionNoteChanged?(taskLabel.stringValue)
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField else { return }
-        if field === taskLabel {
-            onSessionNoteChanged?(taskLabel.stringValue)
-        }
+        guard let field = obj.object as? NSTextField, field === taskLabel else { return }
+        onSessionNoteChanged?(taskLabel.stringValue)
     }
 
     private func endTaskEditing() {
@@ -583,12 +572,11 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         onSessionNoteChanged?(taskLabel.stringValue)
     }
 
+    // MARK: Hover tracking
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-
-        if let timerTrackingArea {
-            removeTrackingArea(timerTrackingArea)
-        }
+        if let timerTrackingArea { removeTrackingArea(timerTrackingArea) }
 
         let timerFrame = timerDisplay.frame.insetBy(dx: -5, dy: -5)
         timerTrackingArea = NSTrackingArea(
@@ -597,10 +585,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             owner: self,
             userInfo: ["element": "timer"]
         )
-
-        if let timerTrackingArea {
-            addTrackingArea(timerTrackingArea)
-        }
+        if let timerTrackingArea { addTrackingArea(timerTrackingArea) }
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -617,6 +602,8 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         updateTimerDisplay()
     }
 
+    // MARK: State updates
+
     func update(recording: Bool) {
         if recording && !isRecording {
             recordingStartedAt = Date()
@@ -625,7 +612,6 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             stopElapsedTimer()
             recordingStartedAt = nil
         }
-
         isRecording = recording
         updateDotAppearance()
         updateTimerDisplay()
@@ -633,7 +619,9 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         needsLayout = true
     }
 
-    func showContent() {
+    /// Show the recording panel (normal hover-expand)
+    func showRecordingContent() {
+        guard !isSearchMode else { return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NotchOverlayConstants.expandDuration
             expandedPanel.animator().alphaValue = 1
@@ -641,7 +629,8 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         }
     }
 
-    func hideContent(completion: (() -> Void)? = nil) {
+    /// Hide the recording panel (normal collapse)
+    func hideRecordingContent(completion: (() -> Void)? = nil) {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = NotchOverlayConstants.collapseDuration
             expandedPanel.animator().alphaValue = 0
@@ -649,105 +638,57 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         }, completionHandler: completion)
     }
 
-    private func startElapsedTimer() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.updateTimerDisplay()
-        }
-    }
-
-    private func stopElapsedTimer() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = nil
-    }
-
-    private func updateDotAppearance() {
-        let color: NSColor = isRecording
-            ? NSColor(red: 0.91, green: 0.45, blue: 0.32, alpha: 1.0)
-            : NSColor(white: 0.5, alpha: 1)
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            dotView.layer?.backgroundColor = color.cgColor
-        }
-    }
-
-    private func updateTimerDisplay() {
-        if timerHovered {
-            timerDisplay.stringValue = isRecording ? "⏸" : "▶"
-            timerDisplay.sizeToFit()
-            needsLayout = true
-            return
-        }
-
-        guard isRecording, let recordingStartedAt else {
-            timerDisplay.stringValue = "REC"
-            timerDisplay.sizeToFit()
-            needsLayout = true
-            return
-        }
-
-        let elapsed = Int(Date().timeIntervalSince(recordingStartedAt))
-        let minutes = elapsed / 60
-        let seconds = elapsed % 60
-        timerDisplay.stringValue = String(format: "%d:%02d", minutes, seconds)
-        timerDisplay.sizeToFit()
-        needsLayout = true
-    }
-
-    // MARK: - Search Mode
-
+    /// Enter search mode — called AFTER the window has expanded to search size
     func enterSearchMode() {
         guard !isSearchMode else { return }
         isSearchMode = true
-        searchPanel.isHidden = false
+
         searchField.stringValue = ""
         clearSearchResults()
+        searchPlaceholder.stringValue = "Type a query and press Enter"
         searchPlaceholder.isHidden = false
+        searchPanel.isHidden = false
 
-        // Show search panel, hide recording panel
+        // Crossfade: hide recording panel, show search panel
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
             expandedPanel.animator().alphaValue = 0
+            gearIcon.animator().alphaValue = 0
             searchPanel.animator().alphaValue = 1
         }
 
-        // Tint search icon to show active state
         searchIcon.contentTintColor = .white
 
-        // Focus the search field
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.searchField.isEditable = true
-            self?.searchField.isSelectable = true
-            self?.window?.makeFirstResponder(self?.searchField)
+        // Focus search field after animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.isSearchMode else { return }
+            self.window?.makeFirstResponder(self.searchField)
         }
     }
 
+    /// Exit search mode — resets state, hides search panel. Does NOT trigger animations on the window.
     func exitSearchMode() {
         guard isSearchMode else { return }
         isSearchMode = false
+
         searchField.stringValue = ""
         window?.makeFirstResponder(nil)
-
-        // Show recording panel, hide search panel
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.15
-            expandedPanel.animator().alphaValue = 1
-            searchPanel.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            self?.searchPanel.isHidden = true
-        })
-
         searchIcon.contentTintColor = NotchOverlayConstants.dimText
-        onSearchToggled?()
+
+        // Hide search panel immediately
+        searchPanel.alphaValue = 0
+        searchPanel.isHidden = true
+        expandedPanel.alphaValue = 0
+        gearIcon.alphaValue = 0
     }
+
+    // MARK: Search results
 
     func showSearchLoading() {
         searchSpinner.startAnimation(nil)
         searchPlaceholder.stringValue = "Searching…"
         searchPlaceholder.isHidden = false
         clearSearchResults()
-        needsLayout = true
     }
 
     func showSearchResults(_ results: [ActivitySearchResult]) {
@@ -765,11 +706,10 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         for result in results.prefix(20) {
             let row = buildResultRow(result)
             searchResultsStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: searchResultsStack.widthAnchor).isActive = true
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.leadingAnchor.constraint(equalTo: searchResultsStack.leadingAnchor).isActive = true
+            row.trailingAnchor.constraint(equalTo: searchResultsStack.trailingAnchor).isActive = true
         }
-
-        searchResultsStack.needsLayout = true
-        searchResultsScroll.documentView?.scroll(.zero)
     }
 
     private func clearSearchResults() {
@@ -788,8 +728,8 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm"
         let timeStr = timeFormatter.string(from: result.timestamp)
-
         let appStr = result.appName ?? ""
+
         let header = makeLabel("\(timeStr)  \(appStr)", size: 11, weight: .semibold, color: NSColor(white: 0.7, alpha: 1))
         header.lineBreakMode = .byTruncatingTail
         row.addSubview(header)
@@ -801,24 +741,63 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         body.cell?.isScrollable = false
         row.addSubview(body)
 
-        // Manual layout via constraints
         header.translatesAutoresizingMaskIntoConstraints = false
         body.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: row.topAnchor, constant: 6),
             header.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8),
             header.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8),
-
             body.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
             body.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8),
             body.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8),
             body.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -6),
         ])
 
-        row.translatesAutoresizingMaskIntoConstraints = false
         row.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
-
         return row
+    }
+
+    // MARK: Private helpers
+
+    private func startElapsedTimer() {
+        elapsedTimer?.invalidate()
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.updateTimerDisplay()
+        }
+    }
+
+    private func stopElapsedTimer() {
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+    }
+
+    private func updateDotAppearance() {
+        let color: NSColor = isRecording
+            ? NSColor(red: 0.91, green: 0.45, blue: 0.32, alpha: 1.0)
+            : NSColor(white: 0.5, alpha: 1)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            dotView.layer?.backgroundColor = color.cgColor
+        }
+    }
+
+    private func updateTimerDisplay() {
+        if timerHovered {
+            timerDisplay.stringValue = isRecording ? "⏸" : "▶"
+            timerDisplay.sizeToFit()
+            needsLayout = true
+            return
+        }
+        guard isRecording, let recordingStartedAt else {
+            timerDisplay.stringValue = "REC"
+            timerDisplay.sizeToFit()
+            needsLayout = true
+            return
+        }
+        let elapsed = Int(Date().timeIntervalSince(recordingStartedAt))
+        timerDisplay.stringValue = String(format: "%d:%02d", elapsed / 60, elapsed % 60)
+        timerDisplay.sizeToFit()
+        needsLayout = true
     }
 
     private func updatePlayIcon() {
@@ -859,12 +838,15 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     }
 }
 
+// MARK: - Animation Controller
+
 private final class NotchOverlayAnimationController {
     private let window: NotchOverlayWindow
     private weak var contentView: NotchOverlayContentView?
 
     private(set) var info: NotchOverlayInfo
     private(set) var isExpanded = false
+    private(set) var isSearchExpanded = false
     private var isAnimating = false
 
     init(window: NotchOverlayWindow, info: NotchOverlayInfo, contentView: NotchOverlayContentView) {
@@ -873,9 +855,7 @@ private final class NotchOverlayAnimationController {
         self.contentView = contentView
     }
 
-    func updateInfo(_ info: NotchOverlayInfo) {
-        self.info = info
-    }
+    func updateInfo(_ info: NotchOverlayInfo) { self.info = info }
 
     func animateOpen(completion: (() -> Void)? = nil) {
         let start = notchFrame()
@@ -903,28 +883,39 @@ private final class NotchOverlayAnimationController {
         guard !isExpanded, !isAnimating else { return }
         isAnimating = true
         isExpanded = true
-
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = NotchOverlayConstants.expandDuration
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
-            context.allowsImplicitAnimation = true
-            window.animator().setFrame(expandedFrame(), display: true)
-        }, completionHandler: { [weak self] in
-            self?.isAnimating = false
-            completion?()
-        })
+        animateTo(expandedFrame(), completion: completion)
     }
 
     func collapse(completion: (() -> Void)? = nil) {
         guard isExpanded, !isAnimating else { return }
         isAnimating = true
         isExpanded = false
+        isSearchExpanded = false
+        animateTo(collapsedFrame(), completion: completion)
+    }
 
+    func expandToSearch(completion: (() -> Void)? = nil) {
+        guard !isAnimating else { return }
+        isAnimating = true
+        isExpanded = true
+        isSearchExpanded = true
+        animateTo(searchExpandedFrame(), completion: completion)
+    }
+
+    func collapseFromSearch(completion: (() -> Void)? = nil) {
+        guard !isAnimating else { return }
+        isAnimating = true
+        isExpanded = false
+        isSearchExpanded = false
+        animateTo(collapsedFrame(), completion: completion)
+    }
+
+    private func animateTo(_ frame: NSRect, completion: (() -> Void)?) {
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = NotchOverlayConstants.collapseDuration
+            context.duration = NotchOverlayConstants.expandDuration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
             context.allowsImplicitAnimation = true
-            window.animator().setFrame(collapsedFrame(), display: true)
+            window.animator().setFrame(frame, display: true)
         }, completionHandler: { [weak self] in
             self?.isAnimating = false
             completion?()
@@ -955,38 +946,15 @@ private final class NotchOverlayAnimationController {
         return NSRect(x: info.centerX - width / 2, y: info.topY - height, width: width, height: height)
     }
 
-    func expandToSearch(completion: (() -> Void)? = nil) {
-        guard !isAnimating else { return }
-        isAnimating = true
-        isExpanded = true
-
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = NotchOverlayConstants.expandDuration
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
-            context.allowsImplicitAnimation = true
-            window.animator().setFrame(searchExpandedFrame(), display: true)
-        }, completionHandler: { [weak self] in
-            self?.isAnimating = false
-            completion?()
-        })
-    }
-
-    func collapseFromSearch(completion: (() -> Void)? = nil) {
-        guard !isAnimating else { return }
-        isAnimating = true
-        isExpanded = false
-
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = NotchOverlayConstants.collapseDuration
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
-            context.allowsImplicitAnimation = true
-            window.animator().setFrame(collapsedFrame(), display: true)
-        }, completionHandler: { [weak self] in
-            self?.isAnimating = false
-            completion?()
-        })
+    /// The current reference frame for hit-testing mouse proximity
+    func currentFrame() -> NSRect {
+        if isSearchExpanded { return searchExpandedFrame() }
+        if isExpanded { return expandedFrame() }
+        return collapsedFrame()
     }
 }
+
+// MARK: - Controller
 
 @MainActor
 final class NotchOverlayController {
@@ -1016,33 +984,18 @@ final class NotchOverlayController {
         window.contentView?.addSubview(contentView)
         contentView.applyDisplayProfile(hasNotch: info.hasNotch)
 
+        // Wire callbacks
         contentView.onToggleRecording = {
             AppState.shared.isRecording.toggle()
         }
         contentView.onSessionNoteChanged = { note in
             AppState.shared.sessionNoteDraft = note
         }
-        contentView.onSearchToggled = { [weak self] in
-            guard let self else { return }
-            if self.contentView.isSearchMode {
-                // Exiting search — collapse back
-                self.animationController.collapseFromSearch()
-            } else {
-                // Entering search — expand to search size
-                self.animationController.expandToSearch { [weak self] in
-                    self?.contentView.enterSearchMode()
-                }
-            }
+        contentView.onSearchIconClicked = { [weak self] in
+            self?.toggleSearch()
         }
         contentView.onSearchSubmitted = { [weak self] query in
-            guard let self else { return }
-            self.contentView.showSearchLoading()
-            Task {
-                let results = await ActivityAgentManager.shared.searchFTS(query)
-                await MainActor.run {
-                    self.contentView.showSearchResults(results)
-                }
-            }
+            self?.performSearch(query)
         }
         contentView.update(recording: AppState.shared.isRecording)
 
@@ -1058,7 +1011,33 @@ final class NotchOverlayController {
         animationController.animateOpen()
     }
 
-    /// Tear down the overlay: close the window and remove all monitors.
+    // MARK: Search
+
+    private func toggleSearch() {
+        if contentView.isSearchMode {
+            // Exit search → collapse
+            contentView.exitSearchMode()
+            animationController.collapseFromSearch()
+        } else {
+            // Enter search → expand to search size, then enter search mode
+            animationController.expandToSearch { [weak self] in
+                self?.contentView.enterSearchMode()
+            }
+        }
+    }
+
+    private func performSearch(_ query: String) {
+        contentView.showSearchLoading()
+        Task {
+            let results = await ActivityAgentManager.shared.searchFTS(query)
+            await MainActor.run { [weak self] in
+                self?.contentView.showSearchResults(results)
+            }
+        }
+    }
+
+    // MARK: Teardown
+
     func tearDown() {
         debounceTimer?.invalidate()
         debounceTimer = nil
@@ -1086,19 +1065,14 @@ final class NotchOverlayController {
     }
 
     deinit {
-        // Safety net — tearDown() should have been called already
-        if let screenObserver {
-            NotificationCenter.default.removeObserver(screenObserver)
-        }
-        if let globalMouseMonitor {
-            NSEvent.removeMonitor(globalMouseMonitor)
-        }
-        if let localMouseMonitor {
-            NSEvent.removeMonitor(localMouseMonitor)
-        }
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
         debounceTimer?.invalidate()
         dwellTimer?.invalidate()
     }
+
+    // MARK: Screen observer
 
     private func setupScreenObserver() {
         screenObserver = NotificationCenter.default.addObserver(
@@ -1110,18 +1084,16 @@ final class NotchOverlayController {
             let updatedInfo = NotchOverlayDetector.detect()
             self.animationController.updateInfo(updatedInfo)
             self.contentView.applyDisplayProfile(hasNotch: updatedInfo.hasNotch)
-            let frame = self.animationController.isExpanded
-                ? self.animationController.expandedFrame()
-                : self.animationController.collapsedFrame()
-            self.window.setFrame(frame, display: true)
+            self.window.setFrame(self.animationController.currentFrame(), display: true)
         }
     }
+
+    // MARK: Mouse monitoring
 
     private func setupMouseMonitoring() {
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             self?.handleMouseMoved()
         }
-
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
             self?.handleMouseMoved()
             return event
@@ -1130,14 +1102,7 @@ final class NotchOverlayController {
 
     private func handleMouseMoved() {
         let mouse = NSEvent.mouseLocation
-        let referenceFrame: NSRect
-        if contentView.isSearchMode {
-            referenceFrame = animationController.searchExpandedFrame()
-        } else if animationController.isExpanded {
-            referenceFrame = animationController.expandedFrame()
-        } else {
-            referenceFrame = animationController.collapsedFrame()
-        }
+        let referenceFrame = animationController.currentFrame()
 
         let fullZone = referenceFrame.insetBy(dx: -NotchOverlayConstants.hoverPadding, dy: -NotchOverlayConstants.hoverPadding)
         let nearFullZone = fullZone.contains(mouse)
@@ -1161,6 +1126,7 @@ final class NotchOverlayController {
         debounceTimer = Timer.scheduledTimer(withTimeInterval: NotchOverlayConstants.debounceInterval, repeats: false) { [weak self] _ in
             guard let self else { return }
 
+            // Don't auto-expand while in search mode
             if shouldExpand && !self.isInExpandZone && !self.contentView.isSearchMode {
                 self.isInExpandZone = true
                 self.dwellTimer?.invalidate()
@@ -1173,6 +1139,7 @@ final class NotchOverlayController {
                 self.dwellTimer?.invalidate()
             }
 
+            // Mouse left the area entirely — collapse
             if !nearFullZone {
                 self.isInExpandZone = false
                 self.dwellTimer?.invalidate()
@@ -1187,12 +1154,12 @@ final class NotchOverlayController {
     }
 
     private func expandNotch() {
-        contentView.showContent()
+        contentView.showRecordingContent()
         animationController.expand()
     }
 
     private func collapseNotch() {
-        contentView.hideContent()
+        contentView.hideRecordingContent()
         animationController.collapse()
     }
 }
