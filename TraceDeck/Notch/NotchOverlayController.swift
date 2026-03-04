@@ -1018,6 +1018,13 @@ final class NotchOverlayController {
 
         // Wire callbacks
         contentView.onToggleRecording = {
+            // Check screen recording permission before starting
+            if !AppState.shared.isRecording && !PermissionsManager.isScreenRecordingGranted {
+                // Request permission and show onboarding
+                PermissionsManager.requestScreenRecording()
+                NotificationCenter.default.post(name: .showPermissionsOnboarding, object: nil)
+                return
+            }
             AppState.shared.isRecording.toggle()
         }
         contentView.onSessionNoteChanged = { note in
