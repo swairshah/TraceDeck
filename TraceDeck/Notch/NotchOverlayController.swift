@@ -193,6 +193,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         buildTopBar()
         buildRecordingPanel()
         buildSearchPanel()
+        timerDisplay.alphaValue = 0  // hidden in collapsed state
         update(recording: AppState.shared.isRecording)
     }
 
@@ -353,10 +354,9 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let dotSize: CGFloat = 10
         dotView.frame = NSRect(x: horizontalPadding + edgeOffset, y: (barHeight - dotSize) / 2, width: dotSize, height: dotSize)
 
-        timerDisplay.sizeToFit()
         let rightEdge = width - 20 - edgeOffset
 
-        // Search icon sits where the timer/REC label is — right side
+        // Search icon replaces the REC label on the right side
         let searchIconSize: CGFloat = 14
         searchIcon.frame = NSRect(
             x: rightEdge - searchIconSize,
@@ -365,7 +365,8 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             height: searchIconSize
         )
 
-        // Timer goes to the left of the search icon
+        // Timer only visible when expanded (hidden in collapsed bar)
+        timerDisplay.sizeToFit()
         timerDisplay.frame.origin = CGPoint(
             x: searchIcon.frame.minX - timerDisplay.frame.width - 8,
             y: (barHeight - timerDisplay.frame.height) / 2
@@ -422,7 +423,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         guard !searchPanel.isHidden else { return }
 
         let rowHeight: CGFloat = 40
-        let inset: CGFloat = 10
+        let inset: CGFloat = 16
         let gap: CGFloat = 8
 
         searchRow.frame = NSRect(x: 0, y: 0, width: panelWidth, height: rowHeight)
@@ -435,13 +436,14 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             height: spinnerSize
         )
 
-        let fieldX: CGFloat = inset + 4
-        let fieldWidth = panelWidth - fieldX - inset - spinnerSize - 8
+        let fieldX: CGFloat = inset
+        let fieldWidth = panelWidth - fieldX - inset - spinnerSize - 10
         searchField.frame = NSRect(x: fieldX, y: (rowHeight - 20) / 2, width: max(fieldWidth, 40), height: 20)
 
+        let resultsInset: CGFloat = 6
         let resultsY = rowHeight + gap
         let resultsHeight = max(panelHeight - resultsY, 0)
-        searchResultsScroll.frame = NSRect(x: 0, y: resultsY, width: panelWidth, height: resultsHeight)
+        searchResultsScroll.frame = NSRect(x: resultsInset, y: resultsY, width: panelWidth - resultsInset * 2, height: resultsHeight)
 
         searchPlaceholder.frame = NSRect(x: 0, y: resultsY + max(resultsHeight / 2 - 10, 0), width: panelWidth, height: 20)
     }
@@ -630,6 +632,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             context.duration = NotchOverlayConstants.expandDuration
             expandedPanel.animator().alphaValue = 1
             gearIcon.animator().alphaValue = 1
+            timerDisplay.animator().alphaValue = 1
         }
     }
 
@@ -639,6 +642,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             context.duration = NotchOverlayConstants.collapseDuration
             expandedPanel.animator().alphaValue = 0
             gearIcon.animator().alphaValue = 0
+            timerDisplay.animator().alphaValue = 0
         }, completionHandler: completion)
     }
 
