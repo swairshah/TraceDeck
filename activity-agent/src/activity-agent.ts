@@ -35,6 +35,29 @@ import { UserProfileManager, type ProfileEdit, type ProfileHistory } from "./use
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 
+/**
+ * Jaccard word overlap between two activity descriptions.
+ * Returns 0..1 (1 = identical word sets).
+ */
+function wordOverlap(a: string, b: string): number {
+  const toWords = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 0)
+    );
+  const wa = toWords(a);
+  const wb = toWords(b);
+  if (wa.size === 0 && wb.size === 0) return 1;
+  let intersection = 0;
+  for (const w of wa) {
+    if (wb.has(w)) intersection++;
+  }
+  const union = new Set([...wa, ...wb]).size;
+  return union === 0 ? 1 : intersection / union;
+}
+
 const SYSTEM_PROMPT = `You are indexing screenshots for a personal activity search engine. Think like the person who took this screenshot - what terms would THEY use later to find this moment?
 
 Your goal: Extract SEARCHABLE information. Focus on what makes this screenshot FINDABLE later.
@@ -477,6 +500,25 @@ Extract all structured information from this screenshot.`;
     }
 
     const entry = await this.analyzeScreenshot(screenshot, audioContext);
+
+    // Continuation merging: if the LLM says this is a continuation of the
+    // same activity AND the primary app + activity text are very similar to
+    // the previous entry, skip indexing a new row.  We still keep it in the
+    // in-memory context so the LLM has the full history, but the search
+    // index stays clean.
+    if (entry.isContinuation && this.context.entries.length > 0) {
+      const prev = this.context.entries[this.context.entries.length - 1];
+      const sameApp = (prev.app?.name || prev.application) === (entry.app?.name || entry.application);
+      const similarity = wordOverlap(prev.activity, entry.activity);
+
+      if (sameApp && similarity > 0.6) {
+        // Merge: keep in context but don't create a new search index entry
+        this.context.entries.push(entry);
+        this.context.lastProcessed = screenshot.filename;
+        this.saveContext();
+        return entry; // Return entry so caller knows it was processed
+      }
+    }
 
     // Add to context
     this.context.entries.push(entry);
