@@ -256,7 +256,8 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         taskLabel.isSelectable = false
         taskLabel.drawsBackground = false
         taskLabel.delegate = self
-        taskLabel.stringValue = AppState.shared.sessionNoteDraft
+        let draft = AppState.shared.sessionNoteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        taskLabel.stringValue = draft
         timerRow.addSubview(taskLabel)
 
         playChip = roundedBox(NotchOverlayConstants.chipColor, radius: NotchOverlayConstants.chipRadius)
@@ -1020,7 +1021,7 @@ final class NotchOverlayController {
             AppState.shared.isRecording.toggle()
         }
         contentView.onSessionNoteChanged = { note in
-            AppState.shared.sessionNoteDraft = note
+            AppState.shared.sessionNoteDraft = note.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         contentView.onSearchIconClicked = { [weak self] in
             self?.toggleSearch()
