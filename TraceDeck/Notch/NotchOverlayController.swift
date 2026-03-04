@@ -11,6 +11,8 @@ private enum NotchOverlayConstants {
     static let collapsedWidth: CGFloat = 300
     static let expandedWidth: CGFloat = 360
     static let expandedHeight: CGFloat = 120
+    static let searchExpandedWidth: CGFloat = 420
+    static let searchExpandedHeight: CGFloat = 340
 
     static let collapsedHeightWithNotch: CGFloat = 36
     static let collapsedHeightWithoutNotch: CGFloat = 25
@@ -109,6 +111,8 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
     var onToggleRecording: (() -> Void)?
     var onSessionNoteChanged: ((String) -> Void)?
+    var onSearchToggled: (() -> Void)?
+    var onSearchSubmitted: ((String) -> Void)?
 
     @objc dynamic var shapeMorphProgress: CGFloat {
         get { internalShapeMorphProgress }
@@ -144,6 +148,17 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     private var recordingStartedAt: Date?
     private var elapsedTimer: Timer?
     private var hasNotch = false
+
+    // Search mode
+    private(set) var isSearchMode = false
+    private var searchIcon: NSImageView!
+    private var searchPanel: NSView!
+    private var searchRow: NSView!
+    private var searchField: NSTextField!
+    private var searchSpinner: NSProgressIndicator!
+    private var searchResultsScroll: NSScrollView!
+    private var searchResultsStack: NSStackView!
+    private var searchPlaceholder: NSTextField!
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -181,6 +196,14 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         dotView.layer?.cornerRadius = 5
         addSubview(dotView)
 
+        if let image = sfImage("magnifyingglass", size: 11, weight: .medium) {
+            searchIcon = NSImageView(image: image)
+            searchIcon.contentTintColor = NotchOverlayConstants.dimText
+        } else {
+            searchIcon = NSImageView()
+        }
+        addSubview(searchIcon)
+
         timerDisplay = makeLabel("REC", size: 11, weight: .medium)
         timerDisplay.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         addSubview(timerDisplay)
@@ -202,6 +225,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         addSubview(expandedPanel)
 
         buildControlRow()
+        buildSearchPanel()
     }
 
     private func buildControlRow() {
@@ -255,6 +279,67 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         timerRow.addSubview(stopChip)
     }
 
+    private func buildSearchPanel() {
+        searchPanel = FlippedView()
+        searchPanel.wantsLayer = true
+        searchPanel.alphaValue = 0
+        searchPanel.isHidden = true
+        addSubview(searchPanel)
+
+        // Search input row
+        searchRow = roundedBox(NotchOverlayConstants.sectionColor, radius: NotchOverlayConstants.sectionRadius)
+        searchPanel.addSubview(searchRow)
+
+        searchField = NSTextField()
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: "Search your activity…",
+            attributes: [
+                .foregroundColor: NSColor(white: 0.45, alpha: 1),
+                .font: NSFont.systemFont(ofSize: 13)
+            ]
+        )
+        searchField.font = .systemFont(ofSize: 13)
+        searchField.textColor = .white
+        searchField.backgroundColor = .clear
+        searchField.isBezeled = false
+        searchField.focusRingType = .none
+        searchField.isEditable = true
+        searchField.isSelectable = true
+        searchField.drawsBackground = false
+        searchField.delegate = self
+        searchRow.addSubview(searchField)
+
+        searchSpinner = NSProgressIndicator()
+        searchSpinner.style = .spinning
+        searchSpinner.controlSize = .small
+        searchSpinner.isDisplayedWhenStopped = false
+        searchRow.addSubview(searchSpinner)
+
+        // Results scroll area
+        searchResultsStack = NSStackView()
+        searchResultsStack.orientation = .vertical
+        searchResultsStack.alignment = .leading
+        searchResultsStack.spacing = 2
+
+        let clipView = NSClipView()
+        clipView.documentView = searchResultsStack
+        clipView.drawsBackground = false
+
+        searchResultsScroll = NSScrollView()
+        searchResultsScroll.contentView = clipView
+        searchResultsScroll.hasVerticalScroller = true
+        searchResultsScroll.hasHorizontalScroller = false
+        searchResultsScroll.autohidesScrollers = true
+        searchResultsScroll.drawsBackground = false
+        searchResultsScroll.scrollerStyle = .overlay
+        searchPanel.addSubview(searchResultsScroll)
+
+        // Placeholder text
+        searchPlaceholder = makeLabel("Type a query and press Enter", size: 12, weight: .regular, color: NotchOverlayConstants.dimText)
+        searchPlaceholder.alignment = .center
+        searchPanel.addSubview(searchPlaceholder)
+    }
+
     override func layout() {
         super.layout()
 
@@ -271,6 +356,15 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let dotSize: CGFloat = 10
         dotView.frame = NSRect(x: horizontalPadding + edgeOffset, y: (barHeight - dotSize) / 2, width: dotSize, height: dotSize)
 
+        // Search icon — between dot and timer
+        let searchIconSize: CGFloat = 14
+        searchIcon.frame = NSRect(
+            x: dotView.frame.maxX + 12,
+            y: (barHeight - searchIconSize) / 2,
+            width: searchIconSize,
+            height: searchIconSize
+        )
+
         timerDisplay.sizeToFit()
         timerDisplay.frame.origin = CGPoint(
             x: width - timerDisplay.frame.width - 20 - edgeOffset,
@@ -283,8 +377,13 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         gearIcon.frame = NSRect(x: width - 20 - edgeOffset + 8, y: (barHeight - 16) / 2, width: 16, height: 16)
 
         let panelWidth = width - panelX * 2
-        expandedPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: bounds.height - panelY - 12)
+        let panelHeight = bounds.height - panelY - 12
+        expandedPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
         layoutControlRow(panelWidth)
+
+        // Search panel occupies the same space as expandedPanel but is taller
+        searchPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
+        layoutSearchPanel(panelWidth, height: panelHeight)
     }
 
     private func layoutControlRow(_ panelWidth: CGFloat) {
@@ -317,6 +416,35 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
         playIcon.frame = NSRect(x: (buttonSize - 14) / 2, y: (buttonSize - 14) / 2, width: 14, height: 14)
         stopIcon.frame = NSRect(x: (buttonSize - 14) / 2, y: (buttonSize - 14) / 2, width: 14, height: 14)
+    }
+
+    private func layoutSearchPanel(_ panelWidth: CGFloat, height panelHeight: CGFloat) {
+        let rowHeight: CGFloat = 40
+        let inset: CGFloat = 10
+        let gap: CGFloat = 8
+
+        searchRow.frame = NSRect(x: 0, y: 0, width: panelWidth, height: rowHeight)
+
+        let spinnerSize: CGFloat = 16
+        searchSpinner.frame = NSRect(
+            x: panelWidth - inset - spinnerSize,
+            y: (rowHeight - spinnerSize) / 2,
+            width: spinnerSize,
+            height: spinnerSize
+        )
+
+        let fieldX: CGFloat = inset + 4
+        let fieldWidth = panelWidth - fieldX - inset - (searchSpinner.isHidden ? 0 : spinnerSize + 4) - 4
+        searchField.frame = NSRect(x: fieldX, y: (rowHeight - 20) / 2, width: max(fieldWidth, 40), height: 20)
+
+        let resultsY = rowHeight + gap
+        let resultsHeight = max(panelHeight - resultsY, 0)
+        searchResultsScroll.frame = NSRect(x: 0, y: resultsY, width: panelWidth, height: resultsHeight)
+
+        // Size the stack to fill scroll width
+        searchResultsStack.frame = NSRect(x: 0, y: 0, width: panelWidth, height: max(searchResultsStack.fittingSize.height, resultsHeight))
+
+        searchPlaceholder.frame = NSRect(x: 0, y: resultsY + resultsHeight / 2 - 10, width: panelWidth, height: 20)
     }
 
     private func bezelPath(in rect: CGRect, morph: CGFloat) -> CGPath {
@@ -354,6 +482,16 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
 
+        // Search icon click
+        if searchIcon.frame.insetBy(dx: -6, dy: -6).contains(location) {
+            if isSearchMode {
+                exitSearchMode()
+            } else {
+                onSearchToggled?()
+            }
+            return
+        }
+
         if dotView.frame.insetBy(dx: -5, dy: -5).contains(location) {
             onToggleRecording?()
             return
@@ -361,6 +499,17 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
         if timerDisplay.frame.insetBy(dx: -5, dy: -5).contains(location) {
             onToggleRecording?()
+            return
+        }
+
+        // In search mode, clicking the search field focuses it
+        if isSearchMode {
+            let fieldFrame = searchField.convert(searchField.bounds, to: self)
+            if fieldFrame.contains(location) {
+                window?.makeFirstResponder(searchField)
+                return
+            }
+            // Click outside search field but inside panel — do nothing
             return
         }
 
@@ -393,18 +542,38 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(insertNewline(_:)) {
+            if control === searchField {
+                let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !query.isEmpty {
+                    onSearchSubmitted?(query)
+                }
+                return true
+            }
             endTaskEditing()
             return true
+        }
+        if commandSelector == #selector(cancelOperation(_:)) {
+            if isSearchMode {
+                exitSearchMode()
+                onSearchToggled?()
+                return true
+            }
         }
         return false
     }
 
     func controlTextDidChange(_ obj: Notification) {
-        onSessionNoteChanged?(taskLabel.stringValue)
+        guard let field = obj.object as? NSTextField else { return }
+        if field === taskLabel {
+            onSessionNoteChanged?(taskLabel.stringValue)
+        }
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        onSessionNoteChanged?(taskLabel.stringValue)
+        guard let field = obj.object as? NSTextField else { return }
+        if field === taskLabel {
+            onSessionNoteChanged?(taskLabel.stringValue)
+        }
     }
 
     private func endTaskEditing() {
@@ -524,6 +693,132 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         timerDisplay.stringValue = String(format: "%d:%02d", minutes, seconds)
         timerDisplay.sizeToFit()
         needsLayout = true
+    }
+
+    // MARK: - Search Mode
+
+    func enterSearchMode() {
+        guard !isSearchMode else { return }
+        isSearchMode = true
+        searchPanel.isHidden = false
+        searchField.stringValue = ""
+        clearSearchResults()
+        searchPlaceholder.isHidden = false
+
+        // Show search panel, hide recording panel
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            expandedPanel.animator().alphaValue = 0
+            searchPanel.animator().alphaValue = 1
+        }
+
+        // Tint search icon to show active state
+        searchIcon.contentTintColor = .white
+
+        // Focus the search field
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.searchField.isEditable = true
+            self?.searchField.isSelectable = true
+            self?.window?.makeFirstResponder(self?.searchField)
+        }
+    }
+
+    func exitSearchMode() {
+        guard isSearchMode else { return }
+        isSearchMode = false
+        searchField.stringValue = ""
+        window?.makeFirstResponder(nil)
+
+        // Show recording panel, hide search panel
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            expandedPanel.animator().alphaValue = 1
+            searchPanel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            self?.searchPanel.isHidden = true
+        })
+
+        searchIcon.contentTintColor = NotchOverlayConstants.dimText
+        onSearchToggled?()
+    }
+
+    func showSearchLoading() {
+        searchSpinner.startAnimation(nil)
+        searchPlaceholder.stringValue = "Searching…"
+        searchPlaceholder.isHidden = false
+        clearSearchResults()
+        needsLayout = true
+    }
+
+    func showSearchResults(_ results: [ActivitySearchResult]) {
+        searchSpinner.stopAnimation(nil)
+        clearSearchResults()
+
+        if results.isEmpty {
+            searchPlaceholder.stringValue = "No results found"
+            searchPlaceholder.isHidden = false
+            return
+        }
+
+        searchPlaceholder.isHidden = true
+
+        for result in results.prefix(20) {
+            let row = buildResultRow(result)
+            searchResultsStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: searchResultsStack.widthAnchor).isActive = true
+        }
+
+        searchResultsStack.needsLayout = true
+        searchResultsScroll.documentView?.scroll(.zero)
+    }
+
+    private func clearSearchResults() {
+        for view in searchResultsStack.arrangedSubviews {
+            searchResultsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+    }
+
+    private func buildResultRow(_ result: ActivitySearchResult) -> NSView {
+        let row = FlippedView()
+        row.wantsLayer = true
+        row.layer?.backgroundColor = NotchOverlayConstants.chipColor.cgColor
+        row.layer?.cornerRadius = 8
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+        let timeStr = timeFormatter.string(from: result.timestamp)
+
+        let appStr = result.appName ?? ""
+        let header = makeLabel("\(timeStr)  \(appStr)", size: 11, weight: .semibold, color: NSColor(white: 0.7, alpha: 1))
+        header.lineBreakMode = .byTruncatingTail
+        row.addSubview(header)
+
+        let body = makeLabel(result.activity, size: 11, weight: .regular, color: NSColor(white: 0.85, alpha: 1))
+        body.lineBreakMode = .byTruncatingTail
+        body.maximumNumberOfLines = 2
+        body.cell?.wraps = true
+        body.cell?.isScrollable = false
+        row.addSubview(body)
+
+        // Manual layout via constraints
+        header.translatesAutoresizingMaskIntoConstraints = false
+        body.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: row.topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8),
+            header.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8),
+
+            body.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
+            body.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8),
+            body.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8),
+            body.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -6),
+        ])
+
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
+
+        return row
     }
 
     private func updatePlayIcon() {
@@ -653,6 +948,44 @@ private final class NotchOverlayAnimationController {
         let height = NotchOverlayConstants.expandedHeight
         return NSRect(x: info.centerX - width / 2, y: info.topY - height, width: width, height: height)
     }
+
+    func searchExpandedFrame() -> NSRect {
+        let width = NotchOverlayConstants.searchExpandedWidth
+        let height = NotchOverlayConstants.searchExpandedHeight
+        return NSRect(x: info.centerX - width / 2, y: info.topY - height, width: width, height: height)
+    }
+
+    func expandToSearch(completion: (() -> Void)? = nil) {
+        guard !isAnimating else { return }
+        isAnimating = true
+        isExpanded = true
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = NotchOverlayConstants.expandDuration
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
+            context.allowsImplicitAnimation = true
+            window.animator().setFrame(searchExpandedFrame(), display: true)
+        }, completionHandler: { [weak self] in
+            self?.isAnimating = false
+            completion?()
+        })
+    }
+
+    func collapseFromSearch(completion: (() -> Void)? = nil) {
+        guard !isAnimating else { return }
+        isAnimating = true
+        isExpanded = false
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = NotchOverlayConstants.collapseDuration
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.0, 0.0, 0.2, 1.0)
+            context.allowsImplicitAnimation = true
+            window.animator().setFrame(collapsedFrame(), display: true)
+        }, completionHandler: { [weak self] in
+            self?.isAnimating = false
+            completion?()
+        })
+    }
 }
 
 @MainActor
@@ -688,6 +1021,28 @@ final class NotchOverlayController {
         }
         contentView.onSessionNoteChanged = { note in
             AppState.shared.sessionNoteDraft = note
+        }
+        contentView.onSearchToggled = { [weak self] in
+            guard let self else { return }
+            if self.contentView.isSearchMode {
+                // Exiting search — collapse back
+                self.animationController.collapseFromSearch()
+            } else {
+                // Entering search — expand to search size
+                self.animationController.expandToSearch { [weak self] in
+                    self?.contentView.enterSearchMode()
+                }
+            }
+        }
+        contentView.onSearchSubmitted = { [weak self] query in
+            guard let self else { return }
+            self.contentView.showSearchLoading()
+            Task {
+                let results = await ActivityAgentManager.shared.searchFTS(query)
+                await MainActor.run {
+                    self.contentView.showSearchResults(results)
+                }
+            }
         }
         contentView.update(recording: AppState.shared.isRecording)
 
@@ -775,9 +1130,14 @@ final class NotchOverlayController {
 
     private func handleMouseMoved() {
         let mouse = NSEvent.mouseLocation
-        let referenceFrame = animationController.isExpanded
-            ? animationController.expandedFrame()
-            : animationController.collapsedFrame()
+        let referenceFrame: NSRect
+        if contentView.isSearchMode {
+            referenceFrame = animationController.searchExpandedFrame()
+        } else if animationController.isExpanded {
+            referenceFrame = animationController.expandedFrame()
+        } else {
+            referenceFrame = animationController.collapsedFrame()
+        }
 
         let fullZone = referenceFrame.insetBy(dx: -NotchOverlayConstants.hoverPadding, dy: -NotchOverlayConstants.hoverPadding)
         let nearFullZone = fullZone.contains(mouse)
@@ -801,7 +1161,7 @@ final class NotchOverlayController {
         debounceTimer = Timer.scheduledTimer(withTimeInterval: NotchOverlayConstants.debounceInterval, repeats: false) { [weak self] _ in
             guard let self else { return }
 
-            if shouldExpand && !self.isInExpandZone {
+            if shouldExpand && !self.isInExpandZone && !self.contentView.isSearchMode {
                 self.isInExpandZone = true
                 self.dwellTimer?.invalidate()
                 self.dwellTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
@@ -816,7 +1176,12 @@ final class NotchOverlayController {
             if !nearFullZone {
                 self.isInExpandZone = false
                 self.dwellTimer?.invalidate()
-                self.collapseNotch()
+                if self.contentView.isSearchMode {
+                    self.contentView.exitSearchMode()
+                    self.animationController.collapseFromSearch()
+                } else {
+                    self.collapseNotch()
+                }
             }
         }
     }
