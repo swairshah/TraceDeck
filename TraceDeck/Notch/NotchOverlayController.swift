@@ -9,9 +9,15 @@ import QuartzCore
 
 private enum NotchOverlayConstants {
     static let collapsedWidth: CGFloat = 300
-    static let collapsedHeight: CGFloat = 36
     static let expandedWidth: CGFloat = 360
     static let expandedHeight: CGFloat = 120
+
+    static let collapsedHeightWithNotch: CGFloat = 36
+    static let collapsedHeightWithoutNotch: CGFloat = 25
+    static let shoulderSizeWithNotch: CGFloat = 16
+    static let shoulderSizeWithoutNotch: CGFloat = 12
+    static let bottomRadiusWithNotch: CGFloat = 22
+    static let bottomRadiusWithoutNotch: CGFloat = 10
 
     static let openDuration: TimeInterval = 0.5
     static let expandDuration: TimeInterval = 0.25
@@ -26,6 +32,18 @@ private enum NotchOverlayConstants {
     static let sectionColor = NSColor(white: 0.14, alpha: 1)
     static let chipColor = NSColor(white: 0.22, alpha: 1)
     static let dimText = NSColor(white: 0.45, alpha: 1)
+
+    static func collapsedHeight(hasNotch: Bool) -> CGFloat {
+        hasNotch ? collapsedHeightWithNotch : collapsedHeightWithoutNotch
+    }
+
+    static func shoulderSize(hasNotch: Bool) -> CGFloat {
+        hasNotch ? shoulderSizeWithNotch : shoulderSizeWithoutNotch
+    }
+
+    static func bottomRadiusLimit(hasNotch: Bool) -> CGFloat {
+        hasNotch ? bottomRadiusWithNotch : bottomRadiusWithoutNotch
+    }
 }
 
 private struct NotchOverlayInfo {
@@ -71,11 +89,13 @@ private final class NotchOverlayWindow: NSPanel {
         isOpaque = false
         hasShadow = false
         ignoresMouseEvents = false
+        becomesKeyOnlyIfNeeded = true
         isMovableByWindowBackground = false
         collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
     }
 
     override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 private final class FlippedView: NSView {
@@ -88,6 +108,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     var onToggleRecording: (() -> Void)?
+    var onSessionNoteChanged: ((String) -> Void)?
 
     @objc dynamic var shapeMorphProgress: CGFloat {
         get { internalShapeMorphProgress }
@@ -122,6 +143,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     private var isRecording = false
     private var recordingStartedAt: Date?
     private var elapsedTimer: Timer?
+    private var hasNotch = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -208,6 +230,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         taskLabel.isSelectable = false
         taskLabel.drawsBackground = false
         taskLabel.delegate = self
+        taskLabel.stringValue = AppState.shared.sessionNoteDraft
         timerRow.addSubview(taskLabel)
 
         playChip = roundedBox(NotchOverlayConstants.chipColor, radius: NotchOverlayConstants.chipRadius)
@@ -240,7 +263,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         shapeMask.path = bezelPath(in: layer.bounds, morph: shapeMorphProgress)
 
         let width = bounds.width
-        let barHeight: CGFloat = NotchOverlayConstants.collapsedHeight
+        let barHeight = NotchOverlayConstants.collapsedHeight(hasNotch: hasNotch)
         let horizontalPadding: CGFloat = 26
         let widthDiff = width - NotchOverlayConstants.collapsedWidth
         let edgeOffset = widthDiff / 2
@@ -301,10 +324,16 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let width = rect.width
         let height = rect.height
 
-        let earSize: CGFloat = 16
-        let bottomRadius: CGFloat = min(22, height / 2, width / 4)
+        let earSize = NotchOverlayConstants.shoulderSize(hasNotch: hasNotch)
+        let maxBottomByHeight = max(0, height - earSize - 1)
+        let bottomRadius = min(
+            NotchOverlayConstants.bottomRadiusLimit(hasNotch: hasNotch),
+            height / 2,
+            width / 4,
+            maxBottomByHeight
+        )
 
-        guard width > earSize * 2 + 4, height > earSize + bottomRadius else {
+        guard width > earSize * 2 + 4, height > earSize + 1 else {
             return CGPath(roundedRect: rect, cornerWidth: min(height / 2, 12), cornerHeight: min(height / 2, 12), transform: nil)
         }
 
@@ -370,10 +399,19 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         return false
     }
 
+    func controlTextDidChange(_ obj: Notification) {
+        onSessionNoteChanged?(taskLabel.stringValue)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        onSessionNoteChanged?(taskLabel.stringValue)
+    }
+
     private func endTaskEditing() {
         taskLabel.isEditable = false
         taskLabel.isSelectable = false
         window?.makeFirstResponder(nil)
+        onSessionNoteChanged?(taskLabel.stringValue)
     }
 
     override func updateTrackingAreas() {
@@ -518,6 +556,12 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let config = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
         return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config)
     }
+
+    func applyDisplayProfile(hasNotch: Bool) {
+        guard self.hasNotch != hasNotch else { return }
+        self.hasNotch = hasNotch
+        needsLayout = true
+    }
 }
 
 private final class NotchOverlayAnimationController {
@@ -600,7 +644,7 @@ private final class NotchOverlayAnimationController {
 
     func collapsedFrame() -> NSRect {
         let width = NotchOverlayConstants.collapsedWidth
-        let height = NotchOverlayConstants.collapsedHeight
+        let height = NotchOverlayConstants.collapsedHeight(hasNotch: info.hasNotch)
         return NSRect(x: info.centerX - width / 2, y: info.topY - height, width: width, height: height)
     }
 
@@ -637,9 +681,13 @@ final class NotchOverlayController {
         contentView.frame = window.contentView?.bounds ?? .zero
         contentView.autoresizingMask = [.width, .height]
         window.contentView?.addSubview(contentView)
+        contentView.applyDisplayProfile(hasNotch: info.hasNotch)
 
         contentView.onToggleRecording = {
             AppState.shared.isRecording.toggle()
+        }
+        contentView.onSessionNoteChanged = { note in
+            AppState.shared.sessionNoteDraft = note
         }
         contentView.update(recording: AppState.shared.isRecording)
 
@@ -655,7 +703,35 @@ final class NotchOverlayController {
         animationController.animateOpen()
     }
 
+    /// Tear down the overlay: close the window and remove all monitors.
+    func tearDown() {
+        debounceTimer?.invalidate()
+        debounceTimer = nil
+        dwellTimer?.invalidate()
+        dwellTimer = nil
+
+        if let screenObserver {
+            NotificationCenter.default.removeObserver(screenObserver)
+            self.screenObserver = nil
+        }
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+            self.globalMouseMonitor = nil
+        }
+        if let localMouseMonitor {
+            NSEvent.removeMonitor(localMouseMonitor)
+            self.localMouseMonitor = nil
+        }
+
+        recordingSub?.cancel()
+        recordingSub = nil
+
+        window.orderOut(nil)
+        window.close()
+    }
+
     deinit {
+        // Safety net — tearDown() should have been called already
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
         }
@@ -678,6 +754,7 @@ final class NotchOverlayController {
             guard let self else { return }
             let updatedInfo = NotchOverlayDetector.detect()
             self.animationController.updateInfo(updatedInfo)
+            self.contentView.applyDisplayProfile(hasNotch: updatedInfo.hasNotch)
             let frame = self.animationController.isExpanded
                 ? self.animationController.expandedFrame()
                 : self.animationController.collapsedFrame()

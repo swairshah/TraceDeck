@@ -13,10 +13,6 @@ struct TraceDeckApp: App {
         Window(AppIdentity.displayName, id: "main") {
             MainView()
                 .frame(minWidth: 800, minHeight: 500)
-                .onDisappear {
-                    // Hide from dock when window is closed
-                    NSApp.setActivationPolicy(.accessory)
-                }
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentMinSize)
