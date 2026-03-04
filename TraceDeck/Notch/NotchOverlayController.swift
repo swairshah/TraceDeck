@@ -375,10 +375,10 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         gearIcon.frame = NSRect(x: width - 20 - edgeOffset + 8, y: (barHeight - 16) / 2, width: 16, height: 16)
 
         // Panels
-        let panelX: CGFloat = 20
+        let panelX: CGFloat = 30
         let panelY: CGFloat = barHeight + 14
         let panelWidth = width - panelX * 2
-        let panelHeight = max(bounds.height - panelY - 10, 0)
+        let panelHeight = max(bounds.height - panelY - 14, 0)
 
         expandedPanel.frame = NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight)
         layoutRecordingRow(panelWidth)

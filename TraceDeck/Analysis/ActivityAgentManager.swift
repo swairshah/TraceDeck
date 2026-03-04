@@ -700,13 +700,15 @@ final class ActivityAgentManager: ObservableObject {
     private func parseSearchResults(_ output: String) -> [ActivitySearchResult] {
         var results: [ActivitySearchResult] = []
         
-        // Parse the FTS output format
-        // Expected format from CLI:
-        // [2026-01-02 17:18:15] Chrome
-        //   File: 20260102_171815225.jpg
-        //   Activity: ...
-        //   Summary: ...
-        //   Tags: ...
+        // Parse the FTS output format from the CLI.
+        // Actual format:
+        //   [2026-02-22 14:34:29] Chrome (continuation)
+        //     File: 20260222_143429450.jpg
+        //     [PRIMARY] Chrome — Viewing pi-telemetry GitHub repository
+        //       Window: github.com/swairshah/pi-telemetry
+        //       URL: https://github.com/swairshah/pi-telemetry
+        //       Summary: User navigated to...
+        //       Tags: pi-telemetry, GitHub, ...
         
         let lines = output.components(separatedBy: "\n")
         var currentResult: (date: String, time: String, app: String, activity: String, summary: String, tags: [String], url: String?, filename: String)?
@@ -714,7 +716,7 @@ final class ActivityAgentManager: ObservableObject {
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             
-            // Header line: [2026-01-02 17:18:15] AppName
+            // Header line: [2026-01-02 17:18:15] AppName (optional suffix)
             if let match = trimmed.range(of: #"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\] (.+)"#, options: .regularExpression) {
                 // Save previous result if exists
                 if let r = currentResult {
@@ -745,7 +747,18 @@ final class ActivityAgentManager: ObservableObject {
             else if trimmed.hasPrefix("File: "), currentResult != nil {
                 currentResult?.filename = String(trimmed.dropFirst(6))
             }
-            // Activity line
+            // Activity context line: [PRIMARY] App — Description  or  [SECONDARY] App — Description
+            else if (trimmed.hasPrefix("[PRIMARY]") || trimmed.hasPrefix("[SECONDARY]")), currentResult != nil {
+                // Extract description after the em-dash (—) or regular dash (-)
+                if let dashRange = trimmed.range(of: " — ") ?? trimmed.range(of: " - ") {
+                    currentResult?.activity = String(trimmed[dashRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                } else {
+                    // No dash, take everything after the ] 
+                    let afterBracket = trimmed.drop(while: { $0 != "]" }).dropFirst().trimmingCharacters(in: .whitespaces)
+                    currentResult?.activity = afterBracket
+                }
+            }
+            // Legacy "Activity:" format (for backward compat)
             else if trimmed.hasPrefix("Activity: "), currentResult != nil {
                 currentResult?.activity = String(trimmed.dropFirst(10))
             }
