@@ -80,19 +80,33 @@ final class ActivityAgentManager: ObservableObject {
         let bundleMacOS = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/activity-agent").path
         let bundleResources = Bundle.main.resourcePath.map { $0 + "/activity-agent" } ?? ""
         
+        #if DEBUG
+        // In development, prefer the source binary so code changes are picked up
+        // immediately without relying on whatever binary got copied into the app bundle.
         let possiblePaths = [
-            // In the app bundle's MacOS folder (preferred for executables)
+            NSHomeDirectory() + "/work/projects/ctxl/activity-agent/dist/activity-agent",
+            NSHomeDirectory() + "/work/projects/TraceDeck/activity-agent/dist/activity-agent",
+            // In the app bundle's MacOS folder
             bundleMacOS,
             // In the app bundle's Resources
             bundleResources,
-            // Development: source project
-            NSHomeDirectory() + "/work/projects/TraceDeck/activity-agent/dist/activity-agent",
-            NSHomeDirectory() + "/work/projects/ctxl/activity-agent/dist/activity-agent",
             // Installed via brew or manually
             "/usr/local/bin/activity-agent",
             "/opt/homebrew/bin/activity-agent",
             NSHomeDirectory() + "/.local/bin/activity-agent"
         ]
+        #else
+        let possiblePaths = [
+            // In the app bundle's MacOS folder (preferred for executables)
+            bundleMacOS,
+            // In the app bundle's Resources
+            bundleResources,
+            // Installed via brew or manually
+            "/usr/local/bin/activity-agent",
+            "/opt/homebrew/bin/activity-agent",
+            NSHomeDirectory() + "/.local/bin/activity-agent"
+        ]
+        #endif
         
         let foundPath = possiblePaths.first { FileManager.default.fileExists(atPath: $0) }
         self.agentPath = foundPath ?? "/usr/local/bin/activity-agent"
@@ -524,7 +538,56 @@ final class ActivityAgentManager: ObservableObject {
             return "Error: \(error.localizedDescription)"
         }
     }
-    
+
+    /// Generate a concise live summary for an in-progress workflow recording.
+    func inferLiveSessionSummary(
+        note: String?,
+        transcript: String,
+        recentScreenshots: [Screenshot]
+    ) async -> String? {
+        guard isAgentAvailable else { return nil }
+
+        let apiKey = UserDefaults.standard.string(forKey: "anthropicAPIKey") ?? ""
+        guard !apiKey.isEmpty else { return nil }
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        let screenshotFacts = recentScreenshots
+            .sorted { $0.capturedAt < $1.capturedAt }
+            .suffix(8)
+            .map { shot in
+                let time = formatter.string(from: shot.capturedDate)
+                return "- \(time) [\(shot.trigger.rawValue)] \(URL(fileURLWithPath: shot.filePath).lastPathComponent)"
+            }
+            .joined(separator: "\n")
+
+        let clippedTranscript = String(transcript.suffix(2_500))
+        let clippedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sessionNote = (clippedNote?.isEmpty == false) ? clippedNote! : "None"
+
+        let prompt = """
+        Create a concise live workflow summary for an in-progress macOS activity recording session.
+        Keep the answer under 3 short lines.
+        Focus on what the user is currently doing and the likely output/outcome.
+
+        Session note: \(sessionNote)
+
+        Recent screenshot events:
+        \(screenshotFacts)
+
+        Live transcript excerpt:
+        \(clippedTranscript)
+        """
+
+        let response = await chat(prompt)
+        let cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("Error:") || cleaned.hasPrefix("Agent not available") {
+            return nil
+        }
+        return cleaned
+    }
+
     // MARK: - Private Helpers
     
     /// Get environment with API key
