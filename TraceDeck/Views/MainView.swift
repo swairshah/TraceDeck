@@ -8,6 +8,7 @@ import SwiftUI
 enum MainTab {
     case search
     case chat
+    case settings
     case dayActivity  // Shows activity for selected date
 }
 
@@ -17,7 +18,7 @@ struct MainView: View {
     @State private var selectedDate = Date()
     @State private var screenshots: [Screenshot] = []
     @State private var selectedScreenshot: Screenshot?
-    @State private var showSettings = false
+    @State private var showPermissionsOnboarding = false
     @State private var searchText = ""
     @State private var searchResults: [ActivitySearchResult] = []
     @State private var isSearchingInProgress = false
@@ -25,7 +26,10 @@ struct MainView: View {
     @State private var selectedTab: MainTab = .search
     @State private var previousTab: MainTab = .search  // To restore after closing day view
     @State private var dayActivities: [ActivitySearchResult] = []
+    @State private var workflowSessions: [WorkflowSession] = []
     @State private var isLoadingDayActivities = false
+    @State private var screenshotObserver: NSObjectProtocol?
+    @State private var workflowSessionObserver: NSObjectProtocol?
     @AppStorage("indexingEnabled") private var indexingEnabled = true
 
     private let columns = [
@@ -137,7 +141,7 @@ struct MainView: View {
                     
                     Spacer()
                     
-                    Button(action: { showSettings = true }) {
+                    Button(action: { selectedTab = .settings }) {
                         Image(systemName: "gear")
                     }
                     .buttonStyle(.plain)
@@ -167,6 +171,15 @@ struct MainView: View {
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
+
+                    Button(action: { selectedTab = .settings }) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 14))
+                            .frame(width: 32, height: 24)
+                            .background(selectedTab == .settings ? Color.accentColor.opacity(0.2) : Color.clear)
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
                     
                     Spacer()
                 }
@@ -188,9 +201,12 @@ struct MainView: View {
                     )
                 case .chat:
                     AgentChatView()
+                case .settings:
+                    SettingsView(embedded: true)
                 case .dayActivity:
                     DayActivityView(
                         date: selectedDate,
+                        sessions: workflowSessions,
                         activities: dayActivities,
                         screenshots: screenshots,
                         isLoading: isLoadingDayActivities,
@@ -201,6 +217,7 @@ struct MainView: View {
         }
         .onChange(of: selectedDate) { _, newDate in
             loadScreenshots(for: newDate)
+            loadWorkflowSessions(for: newDate)
             // Show day activity view when date is selected
             if selectedTab != .dayActivity {
                 previousTab = selectedTab
@@ -210,7 +227,10 @@ struct MainView: View {
         }
         .onAppear {
             loadScreenshots(for: selectedDate)
+            loadWorkflowSessions(for: selectedDate)
+            loadDayActivities(for: selectedDate)
             setupNotificationObserver()
+            evaluatePermissionsOnboarding()
             
             // Start periodic indexing when app appears (if enabled)
             if UserDefaults.standard.object(forKey: "indexingEnabled") == nil {
@@ -221,11 +241,23 @@ struct MainView: View {
                 agentManager.startPeriodicIndexing()
             }
         }
+        .onDisappear {
+            teardownNotificationObserver()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openSettingsTab)) { _ in
+            selectedTab = .settings
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showPermissionsOnboarding)) { _ in
+            showPermissionsOnboarding = true
+        }
         .sheet(item: $selectedScreenshot) { screenshot in
             ScreenshotDetailView(screenshot: screenshot)
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
+        .sheet(isPresented: $showPermissionsOnboarding) {
+            PermissionsOnboardingView {
+                showPermissionsOnboarding = false
+            }
+            .interactiveDismissDisabled(true)
         }
         .sheet(isPresented: $showActivityLog) {
             ActivityLogView()
@@ -237,8 +269,21 @@ struct MainView: View {
                 agentManager.stopPeriodicIndexing()
             }
         }
+        .onChange(of: agentManager.isIndexing) { _, isIndexing in
+            guard !isIndexing else { return }
+            loadDayActivities(for: selectedDate)
+        }
     }
     
+    private func evaluatePermissionsOnboarding() {
+        if PermissionsManager.isScreenRecordingGranted {
+            UserDefaults.standard.set(true, forKey: "didCompletePermissionsOnboarding")
+            return
+        }
+
+        showPermissionsOnboarding = true
+    }
+
     private func performSearch() {
         guard !searchText.isEmpty else { return }
         isSearchingInProgress = true
@@ -268,21 +313,49 @@ struct MainView: View {
             }
         }
     }
+
+    private func loadWorkflowSessions(for date: Date) {
+        workflowSessions = StorageManager.shared.fetchWorkflowSessionsForDay(date)
+    }
     
     private func closeDayActivityView() {
         selectedTab = previousTab
     }
 
     private func setupNotificationObserver() {
-        NotificationCenter.default.addObserver(
+        guard screenshotObserver == nil, workflowSessionObserver == nil else { return }
+
+        screenshotObserver = NotificationCenter.default.addObserver(
             forName: .screenshotCaptured,
             object: nil,
             queue: .main
-        ) { _ in
-            // Reload if viewing today
-            if Calendar.current.isDateInToday(selectedDate) {
+        ) { notification in
+            let capturedAt = notification.userInfo?["capturedAt"] as? Date ?? Date()
+            if Calendar.current.isDate(capturedAt, inSameDayAs: selectedDate) {
                 loadScreenshots(for: selectedDate)
+                loadWorkflowSessions(for: selectedDate)
+                loadDayActivities(for: selectedDate)
             }
+        }
+
+        workflowSessionObserver = NotificationCenter.default.addObserver(
+            forName: .workflowSessionUpdated,
+            object: nil,
+            queue: .main
+        ) { _ in
+            loadWorkflowSessions(for: selectedDate)
+            loadDayActivities(for: selectedDate)
+        }
+    }
+
+    private func teardownNotificationObserver() {
+        if let screenshotObserver {
+            NotificationCenter.default.removeObserver(screenshotObserver)
+            self.screenshotObserver = nil
+        }
+        if let workflowSessionObserver {
+            NotificationCenter.default.removeObserver(workflowSessionObserver)
+            self.workflowSessionObserver = nil
         }
     }
 
@@ -384,6 +457,7 @@ struct SearchTabView: View {
 
 struct DayActivityView: View {
     let date: Date
+    let sessions: [WorkflowSession]
     let activities: [ActivitySearchResult]
     let screenshots: [Screenshot]
     let isLoading: Bool
@@ -402,9 +476,15 @@ struct DayActivityView: View {
                 VStack(alignment: .leading) {
                     Text(date, style: .date)
                         .font(.headline)
-                    Text("\(activities.isEmpty ? screenshots.count : activities.count) \(activities.isEmpty ? "screenshots" : "activities")")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if !sessions.isEmpty {
+                        Text("\(sessions.count) sessions")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("\(activities.isEmpty ? screenshots.count : activities.count) \(activities.isEmpty ? "screenshots" : "activities")")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 Spacer()
@@ -426,6 +506,15 @@ struct DayActivityView: View {
                 Spacer()
                 ProgressView("Loading activities...")
                 Spacer()
+            } else if !sessions.isEmpty {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(sessions) { session in
+                            WorkflowSessionCard(session: session)
+                        }
+                    }
+                    .padding()
+                }
             } else if !activities.isEmpty {
                 // Show indexed activities
                 ScrollView {
@@ -472,6 +561,97 @@ struct DayActivityView: View {
         .sheet(item: $selectedActivity) { activity in
             ActivityDetailView(result: activity)
         }
+    }
+}
+
+// MARK: - Workflow Session Card
+
+struct WorkflowSessionCard: View {
+    let session: WorkflowSession
+
+    private var screenshots: [Screenshot] {
+        guard let sessionID = session.id else { return [] }
+        return StorageManager.shared.fetchScreenshots(forSessionID: sessionID)
+    }
+
+    private var audioRecordings: [AudioRecording] {
+        guard let sessionID = session.id else { return [] }
+        return StorageManager.shared.fetchAudioRecordings(forSessionID: sessionID)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(session.note?.isEmpty == false ? session.note! : "Workflow Session")
+                    .font(.headline)
+                    .lineLimit(2)
+                Spacer()
+                Text(session.startedDate, style: .time)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Label("\(screenshots.count)", systemImage: "photo")
+                Label("\(audioRecordings.count)", systemImage: "waveform")
+                if session.isActive {
+                    Label("Live", systemImage: "record.circle.fill")
+                        .foregroundColor(.red)
+                } else if let endedDate = session.endedDate {
+                    Text(durationString(from: session.startedDate, to: endedDate))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .font(.caption)
+
+            if let summary = session.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.subheadline)
+                    .lineLimit(4)
+            } else if let transcript = session.liveTranscript, !transcript.isEmpty {
+                Text(transcript)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(6)
+            } else {
+                Text("Session summary will appear once enough activity is captured.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if !screenshots.isEmpty {
+                let preview = Array(screenshots.suffix(3))
+                HStack(spacing: 6) {
+                    ForEach(preview) { screenshot in
+                        if let image = NSImage(contentsOfFile: screenshot.filePath) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(height: 56)
+                                .frame(maxWidth: .infinity)
+                                .clipped()
+                                .cornerRadius(6)
+                        } else {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.15))
+                                .frame(height: 56)
+                                .frame(maxWidth: .infinity)
+                                .cornerRadius(6)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(12)
+    }
+
+    private func durationString(from start: Date, to end: Date) -> String {
+        let interval = Int(end.timeIntervalSince(start))
+        let minutes = interval / 60
+        let seconds = interval % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
