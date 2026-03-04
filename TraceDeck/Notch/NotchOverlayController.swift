@@ -241,7 +241,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
         taskLabel = NSTextField()
         taskLabel.placeholderAttributedString = NSAttributedString(
-            string: "Session note (optional)",
+            string: "Session note…",
             attributes: [
                 .foregroundColor: NSColor(white: 0.45, alpha: 1),
                 .font: NSFont.systemFont(ofSize: 13)
@@ -644,7 +644,10 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             context.duration = NotchOverlayConstants.expandDuration
             expandedPanel.animator().alphaValue = 1
             gearIcon.animator().alphaValue = 1
-            timerDisplay.animator().alphaValue = 1
+            // Only show timer in top bar when actively recording
+            if isRecording {
+                timerDisplay.animator().alphaValue = 1
+            }
         }
     }
 
@@ -804,15 +807,21 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     }
 
     private func updateTimerDisplay() {
+        guard isRecording else {
+            // Not recording — hide timer entirely
+            timerDisplay.stringValue = ""
+            timerDisplay.alphaValue = 0
+            needsLayout = true
+            return
+        }
         if timerHovered {
-            timerDisplay.stringValue = isRecording ? "⏸" : "▶"
+            timerDisplay.stringValue = "⏸"
             timerDisplay.sizeToFit()
             needsLayout = true
             return
         }
-        guard isRecording, let recordingStartedAt else {
-            timerDisplay.stringValue = "REC"
-            timerDisplay.sizeToFit()
+        guard let recordingStartedAt else {
+            timerDisplay.stringValue = ""
             needsLayout = true
             return
         }
