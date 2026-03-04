@@ -10,13 +10,20 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var appState = AppState.shared
 
+    var embedded: Bool = false
+    var onDone: (() -> Void)? = nil
+
     @AppStorage("screenshotIntervalSeconds") private var interval: Double = 10
     @AppStorage("storageLimitGB") private var storageLimitGB: Int = 5
     @AppStorage("anthropicAPIKey") private var anthropicAPIKey: String = ""
-    @AppStorage("transcriptionModelPath") private var transcriptionModelPath: String = Transcriber.defaultModelPath
+    @AppStorage("bezelEnabled") private var bezelEnabled: Bool = true
 
-    @State private var hasAccessibilityPermission = AXIsProcessTrusted()
+    @State private var hasAccessibilityPermission = PermissionsManager.isAccessibilityGranted
+    @State private var hasScreenRecordingPermission = PermissionsManager.isScreenRecordingGranted
     @State private var showAPIKey = false
+    @State private var permissionRefreshTask: Task<Void, Never>?
+    @State private var elevenLabsKeyStatus = "Not found"
+    @State private var elevenLabsKeyAvailable = false
 
     private let intervalOptions: [Double] = [5, 10, 15, 30, 60]
     private let storageLimitOptions: [Int] = [1, 2, 5, 10, 20, 50]
@@ -31,24 +38,33 @@ struct SettingsView: View {
                 Divider()
 
                 // Permissions Section
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     Text("Permissions")
                         .font(.headline)
 
-                    Text("If macOS prompts fail to open the correct page, use these buttons:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    HStack(spacing: 12) {
-                        Button("Screen Recording") {
-                            openScreenRecordingSettings()
+                    PermissionStatusRow(
+                        title: "Screen Recording",
+                        description: "Required to capture screenshots",
+                        granted: hasScreenRecordingPermission,
+                        buttonTitle: "Open Settings",
+                        note: "May require reopening TraceDeck after granting"
+                    ) {
+                        _ = PermissionsManager.requestScreenRecording()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            PermissionsManager.openScreenRecordingSettings()
                         }
-                        .buttonStyle(.bordered)
+                    }
 
-                        Button("Accessibility") {
-                            openAccessibilitySettings()
+                    PermissionStatusRow(
+                        title: "Accessibility",
+                        description: "Optional, enables browser tab detection",
+                        granted: hasAccessibilityPermission,
+                        buttonTitle: "Open Settings"
+                    ) {
+                        PermissionsManager.requestAccessibility()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            PermissionsManager.openAccessibilitySettings()
                         }
-                        .buttonStyle(.bordered)
                     }
                 }
 
@@ -69,15 +85,32 @@ struct SettingsView: View {
                     }
                     .toggleStyle(.switch)
 
-                    // Accessibility permission status
                     HStack(spacing: 8) {
                         Image(systemName: hasAccessibilityPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                             .foregroundColor(hasAccessibilityPermission ? .green : .orange)
 
-                        Text(hasAccessibilityPermission ? "Accessibility: Granted" : "Accessibility: Required for tab detection")
+                        Text(hasAccessibilityPermission ? "Accessibility granted" : "Accessibility permission improves browser tab tracking")
                             .font(.caption)
                     }
                     .padding(.top, 4)
+                }
+
+                Divider()
+
+                // Notch Bezel Section
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Notch Bezel")
+                        .font(.headline)
+
+                    Toggle(isOn: $bezelEnabled) {
+                        VStack(alignment: .leading) {
+                            Text("Show notch bezel overlay")
+                            Text("Displays recording status and controls near the notch/menu bar")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
                 }
 
                 Divider()
@@ -175,19 +208,19 @@ struct SettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Audio Transcription")
+                    Text("Audio Transcription (ElevenLabs)")
                         .font(.headline)
 
-                    TextField("qwen_asr model path", text: $transcriptionModelPath)
-                        .textFieldStyle(.roundedBorder)
-
-                    let pathExists = FileManager.default.fileExists(atPath: transcriptionModelPath)
                     Label(
-                        pathExists ? "Model path found" : "Model path not found (audio still saves, transcription is skipped)",
-                        systemImage: pathExists ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                        elevenLabsKeyStatus,
+                        systemImage: elevenLabsKeyAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                     )
-                    .foregroundColor(pathExists ? .green : .orange)
+                    .foregroundColor(elevenLabsKeyAvailable ? .green : .orange)
                     .font(.caption)
+
+                    Text("Set `ELEVENLABS_API_KEY` in your shell environment or `~/.env`.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
                 Divider()
@@ -233,48 +266,50 @@ struct SettingsView: View {
                     .font(.caption)
                 }
 
-                Spacer(minLength: 20)
+                if !embedded {
+                    Spacer(minLength: 20)
 
-                // Done button
-                HStack {
-                    Spacer()
-                    Button("Done") {
-                        dismiss()
+                    HStack {
+                        Spacer()
+                        Button("Done") {
+                            if let onDone {
+                                onDone()
+                            } else {
+                                dismiss()
+                            }
+                        }
+                        .keyboardShortcut(.defaultAction)
                     }
-                    .keyboardShortcut(.defaultAction)
                 }
             }
             .padding()
         }
-        .frame(width: 420, height: 700)
+        .frame(width: embedded ? nil : 420, height: embedded ? nil : 700)
         .onAppear {
-            hasAccessibilityPermission = AXIsProcessTrusted()
+            refreshPermissions()
+            startPermissionPolling()
             AudioCaptureManager.shared.refreshTranscriber()
+            refreshElevenLabsKeyStatus()
         }
-        .onChange(of: transcriptionModelPath) { _, _ in
-            AudioCaptureManager.shared.refreshTranscriber()
+        .onDisappear {
+            permissionRefreshTask?.cancel()
+            permissionRefreshTask = nil
         }
     }
 
-    private func openScreenRecordingSettings() {
-        // Use shell command to reliably open Screen Recording settings on macOS 13+
-        let task = Process()
-        task.launchPath = "/usr/bin/open"
-        task.arguments = ["x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"]
-        try? task.run()
+    private func startPermissionPolling() {
+        permissionRefreshTask?.cancel()
+        permissionRefreshTask = Task { @MainActor in
+            while !Task.isCancelled {
+                refreshPermissions()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
-    private func openAccessibilitySettings() {
-        // Use shell command to reliably open Accessibility settings on macOS 13+
-        let task = Process()
-        task.launchPath = "/usr/bin/open"
-        task.arguments = ["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"]
-        try? task.run()
-
-        // Check permission again after a delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            hasAccessibilityPermission = AXIsProcessTrusted()
-        }
+    private func refreshPermissions() {
+        hasAccessibilityPermission = PermissionsManager.isAccessibilityGranted
+        hasScreenRecordingPermission = PermissionsManager.isScreenRecordingGranted
     }
 
     private func formatInterval(_ seconds: Double) -> String {
@@ -293,8 +328,77 @@ struct SettingsView: View {
             return String(format: "%.2f GB", mb / 1024)
         }
     }
+
+    private func refreshElevenLabsKeyStatus() {
+        if let env = ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"],
+           !env.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            elevenLabsKeyAvailable = true
+            elevenLabsKeyStatus = "API key found in process environment"
+            return
+        }
+
+        let envURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".env")
+        if let contents = try? String(contentsOf: envURL, encoding: .utf8),
+           contents.components(separatedBy: .newlines).contains(where: {
+               $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("ELEVENLABS_API_KEY=")
+           }) {
+            elevenLabsKeyAvailable = true
+            elevenLabsKeyStatus = "API key found in ~/.env"
+            return
+        }
+
+        elevenLabsKeyAvailable = false
+        elevenLabsKeyStatus = "API key not found (audio saves, live transcript disabled)"
+    }
+}
+
+private struct PermissionStatusRow: View {
+    let title: String
+    let description: String
+    let granted: Bool
+    let buttonTitle: String
+    var note: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(granted ? .green : .secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let note {
+                    Text(note)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            Spacer()
+
+            if !granted {
+                Button(buttonTitle, action: action)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(granted ? Color.green.opacity(0.08) : Color(NSColor.controlBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(granted ? Color.green.opacity(0.45) : Color(NSColor.separatorColor), lineWidth: 1)
+                )
+        )
+    }
 }
 
 #Preview {
-    SettingsView()
+    SettingsView(embedded: true)
 }
