@@ -353,17 +353,21 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let dotSize: CGFloat = 10
         dotView.frame = NSRect(x: horizontalPadding + edgeOffset, y: (barHeight - dotSize) / 2, width: dotSize, height: dotSize)
 
+        timerDisplay.sizeToFit()
+        let rightEdge = width - 20 - edgeOffset
+
+        // Search icon sits where the timer/REC label is — right side
         let searchIconSize: CGFloat = 14
         searchIcon.frame = NSRect(
-            x: dotView.frame.maxX + 12,
+            x: rightEdge - searchIconSize,
             y: (barHeight - searchIconSize) / 2,
             width: searchIconSize,
             height: searchIconSize
         )
 
-        timerDisplay.sizeToFit()
+        // Timer goes to the left of the search icon
         timerDisplay.frame.origin = CGPoint(
-            x: width - timerDisplay.frame.width - 20 - edgeOffset,
+            x: searchIcon.frame.minX - timerDisplay.frame.width - 8,
             y: (barHeight - timerDisplay.frame.height) / 2
         )
 
