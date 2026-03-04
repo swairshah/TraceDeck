@@ -155,6 +155,7 @@ export class SearchIndex {
         communication_recipient TEXT,
         document_app TEXT,
         document_title TEXT,
+        title TEXT,
         activity TEXT,
         summary TEXT,
         details TEXT,
@@ -174,6 +175,9 @@ export class SearchIndex {
     }
     if (!entryColumnNames.has("audio_transcription")) {
       this.exec(`ALTER TABLE entries ADD COLUMN audio_transcription TEXT`);
+    }
+    if (!entryColumnNames.has("title")) {
+      this.exec(`ALTER TABLE entries ADD COLUMN title TEXT`);
     }
 
     // Recreate entries FTS schema so audio_transcription is indexed.
@@ -308,6 +312,7 @@ export class SearchIndex {
         communication_recipient TEXT,
         document_app TEXT,
         document_title TEXT,
+        title TEXT,
         activity TEXT,
         summary TEXT,
         tags TEXT,
@@ -460,7 +465,7 @@ export class SearchIndex {
         terminal_cwd, last_command,
         communication_app, communication_channel, communication_recipient,
         document_app, document_title,
-        activity, summary, details, tags,
+        title, activity, summary, details, tags,
         audio_recording_id, audio_transcription,
         is_continuation, raw_json
       ) VALUES (
@@ -472,7 +477,7 @@ export class SearchIndex {
         ?, ?,
         ?, ?, ?,
         ?, ?,
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?
       )
@@ -504,6 +509,8 @@ export class SearchIndex {
       entry.communication?.recipient,
       entry.document?.app,
       entry.document?.documentTitle,
+      // Use title from primary activity, or fall back to entry-level fields
+      entry.activities?.find(a => a.layer === "primary")?.title || entry.activities?.[0]?.title || null,
       entry.activity,
       entry.summary,
       entry.details,
@@ -551,7 +558,7 @@ export class SearchIndex {
           terminal_cwd, last_command,
           communication_app, communication_channel, communication_recipient,
           document_app, document_title,
-          activity, summary, tags
+          title, activity, summary, tags
         ) VALUES (
           ?, ?,
           ?, ?, ?,
@@ -561,7 +568,7 @@ export class SearchIndex {
           ?, ?,
           ?, ?, ?,
           ?, ?,
-          ?, ?, ?
+          ?, ?, ?, ?
         )
         `,
         entry.filename,
@@ -589,6 +596,7 @@ export class SearchIndex {
         act.communication?.recipient,
         act.document?.app,
         act.document?.documentTitle,
+        act.title || null,
         act.activity,
         act.summary,
         act.tags?.join(", "),

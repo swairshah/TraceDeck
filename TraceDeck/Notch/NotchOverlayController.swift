@@ -105,6 +105,10 @@ private final class FlippedView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+private final class FlippedClipView: NSClipView {
+    override var isFlipped: Bool { true }
+}
+
 // MARK: - Content View
 
 private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
@@ -323,7 +327,12 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchResultsStack.spacing = 4
         searchResultsStack.translatesAutoresizingMaskIntoConstraints = false
 
+        // Use a flipped clip view so content starts at top
+        let flippedClip = FlippedClipView()
+        flippedClip.drawsBackground = false
+
         searchResultsScroll = NSScrollView()
+        searchResultsScroll.contentView = flippedClip
         searchResultsScroll.documentView = searchResultsStack
         searchResultsScroll.hasVerticalScroller = true
         searchResultsScroll.hasHorizontalScroller = false
@@ -333,13 +342,11 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchPanel.addSubview(searchResultsScroll)
 
         // Pin stack width to clip view so arranged subviews fill horizontally
-        if let clipView = searchResultsScroll.contentView as? NSClipView {
-            NSLayoutConstraint.activate([
-                searchResultsStack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
-                searchResultsStack.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
-                searchResultsStack.topAnchor.constraint(equalTo: clipView.topAnchor),
-            ])
-        }
+        NSLayoutConstraint.activate([
+            searchResultsStack.leadingAnchor.constraint(equalTo: flippedClip.leadingAnchor),
+            searchResultsStack.trailingAnchor.constraint(equalTo: flippedClip.trailingAnchor),
+            searchResultsStack.topAnchor.constraint(equalTo: flippedClip.topAnchor),
+        ])
 
         searchPlaceholder = makeLabel("Type a query and press Enter", size: 12, weight: .regular, color: NotchOverlayConstants.dimText)
         searchPlaceholder.alignment = .center
@@ -739,6 +746,10 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
             row.leadingAnchor.constraint(equalTo: searchResultsStack.leadingAnchor).isActive = true
             row.trailingAnchor.constraint(equalTo: searchResultsStack.trailingAnchor).isActive = true
         }
+
+        // Scroll to top after populating results
+        searchResultsStack.layoutSubtreeIfNeeded()
+        searchResultsScroll.contentView.scroll(to: .zero)
     }
 
     private func clearSearchResults() {
@@ -759,11 +770,11 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         let timeStr = timeFormatter.string(from: result.timestamp)
         let appStr = result.appName ?? ""
 
-        let header = makeLabel("\(timeStr)  \(appStr)", size: 11, weight: .semibold, color: NSColor(white: 0.7, alpha: 1))
+        let header = makeLabel("\(timeStr)  \(appStr)", size: 10, weight: .medium, color: NSColor(white: 0.55, alpha: 1))
         header.lineBreakMode = .byTruncatingTail
         row.addSubview(header)
 
-        let body = makeLabel(result.activity, size: 11, weight: .regular, color: NSColor(white: 0.85, alpha: 1))
+        let body = makeLabel(result.displayTitle, size: 12, weight: .regular, color: NSColor(white: 0.9, alpha: 1))
         body.lineBreakMode = .byTruncatingTail
         body.maximumNumberOfLines = 2
         body.cell?.wraps = true

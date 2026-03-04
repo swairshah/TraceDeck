@@ -389,12 +389,13 @@ Environment:
 /**
  * Format a single activity layer for CLI display
  */
-function formatActivityForCli(act: { layer: string; app?: { name: string; windowTitle?: string; bundleOrPath?: string }; browser?: any; video?: any; ide?: any; terminal?: any; communication?: any; document?: any; activity: string; summary?: string; tags?: string[] }, indent = "    ", verbose = false): string {
+function formatActivityForCli(act: { layer: string; app?: { name: string; windowTitle?: string; bundleOrPath?: string }; browser?: any; video?: any; ide?: any; terminal?: any; communication?: any; document?: any; title?: string; activity: string; summary?: string; tags?: string[] }, indent = "    ", verbose = false): string {
   const layerLabel = act.layer === "primary" ? "PRIMARY" : "OVERLAY";
   const appName = act.app?.name || "Unknown";
   const lines: string[] = [];
 
   lines.push(`  [${layerLabel}] ${appName} — ${act.activity}`);
+  if (act.title) lines.push(`${indent}Title: ${act.title}`);
 
   if (act.app?.windowTitle) lines.push(`${indent}Window: ${act.app.windowTitle}`);
 

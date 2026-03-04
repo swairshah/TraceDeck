@@ -127,6 +127,8 @@ export interface Activity {
   communication?: CommunicationMetadata;
   /** Document/productivity data */
   document?: DocumentMetadata;
+  /** Short display title — like a browser tab or file name (max ~8 words) */
+  title: string;
   /** Brief description of what's happening in this layer */
   activity: string;
   /** Detailed summary of this layer's content */

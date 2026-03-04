@@ -13,6 +13,7 @@ struct ActivitySearchResult: Identifiable {
     let id = UUID()
     let filename: String
     let timestamp: Date
+    let title: String?
     let activity: String
     let summary: String
     let tags: [String]
@@ -22,6 +23,12 @@ struct ActivitySearchResult: Identifiable {
     
     /// The screenshot from StorageManager, if found
     var screenshot: Screenshot?
+    
+    /// Best display label: title if available, otherwise activity
+    var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        return activity
+    }
 }
 
 // MARK: - Activity Log Entry
@@ -711,7 +718,7 @@ final class ActivityAgentManager: ObservableObject {
         //       Tags: pi-telemetry, GitHub, ...
         
         let lines = output.components(separatedBy: "\n")
-        var currentResult: (date: String, time: String, app: String, activity: String, summary: String, tags: [String], url: String?, filename: String)?
+        var currentResult: (date: String, time: String, app: String, title: String?, activity: String, summary: String, tags: [String], url: String?, filename: String)?
         
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -735,6 +742,7 @@ final class ActivityAgentManager: ObservableObject {
                         date: dateTime[0],
                         time: dateTime.count > 1 ? dateTime[1] : "",
                         app: app,
+                        title: nil,
                         activity: "",
                         summary: "",
                         tags: [],
@@ -757,6 +765,10 @@ final class ActivityAgentManager: ObservableObject {
                     let afterBracket = trimmed.drop(while: { $0 != "]" }).dropFirst().trimmingCharacters(in: .whitespaces)
                     currentResult?.activity = afterBracket
                 }
+            }
+            // Title line
+            else if trimmed.hasPrefix("Title: "), currentResult != nil {
+                currentResult?.title = String(trimmed.dropFirst(7))
             }
             // Legacy "Activity:" format (for backward compat)
             else if trimmed.hasPrefix("Activity: "), currentResult != nil {
@@ -794,7 +806,7 @@ final class ActivityAgentManager: ObservableObject {
         return parseSearchResults(output)
     }
     
-    private func createSearchResult(from r: (date: String, time: String, app: String, activity: String, summary: String, tags: [String], url: String?, filename: String)) -> ActivitySearchResult? {
+    private func createSearchResult(from r: (date: String, time: String, app: String, title: String?, activity: String, summary: String, tags: [String], url: String?, filename: String)) -> ActivitySearchResult? {
         // Parse date
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
@@ -828,6 +840,7 @@ final class ActivityAgentManager: ObservableObject {
         return ActivitySearchResult(
             filename: filename,
             timestamp: timestamp,
+            title: r.title,
             activity: r.activity,
             summary: r.summary,
             tags: r.tags,

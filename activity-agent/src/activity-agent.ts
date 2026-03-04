@@ -58,6 +58,47 @@ function wordOverlap(a: string, b: string): number {
   return union === 0 ? 1 : intersection / union;
 }
 
+/**
+ * Derive a short display title from metadata when the LLM doesn't provide one.
+ * Prefers: page_title, video_title, document_title, current_file, then falls back to activity.
+ */
+function deriveTitle(raw: {
+  browser?: BrowserMetadata;
+  video?: VideoMetadata;
+  ide?: IdeMetadata;
+  document?: DocumentMetadata;
+  app?: AppMetadata;
+  activity: string;
+}): string {
+  // Browser: use page title + domain
+  if (raw.browser?.pageTitle) {
+    const domain = raw.browser.domain ? ` — ${raw.browser.domain}` : "";
+    return truncTitle(raw.browser.pageTitle + domain);
+  }
+  // Video: title + channel
+  if (raw.video?.title) {
+    const channel = raw.video.channel ? ` — ${raw.video.channel}` : "";
+    return truncTitle(raw.video.title + channel);
+  }
+  // Document: title + app
+  if (raw.document?.documentTitle) {
+    const app = raw.document.app ? ` — ${raw.document.app}` : "";
+    return truncTitle(raw.document.documentTitle + app);
+  }
+  // IDE: file + project
+  if (raw.ide?.currentFile) {
+    const project = raw.ide.projectName ? ` — ${raw.ide.projectName}` : "";
+    return truncTitle(raw.ide.currentFile + project);
+  }
+  // Fallback: truncate activity
+  return truncTitle(raw.activity);
+}
+
+function truncTitle(s: string, maxLen = 60): string {
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen - 1) + "…";
+}
+
 const SYSTEM_PROMPT = `You are indexing screenshots for a personal activity search engine. Think like the person who took this screenshot - what terms would THEY use later to find this moment?
 
 Your goal: Extract SEARCHABLE information. Focus on what makes this screenshot FINDABLE later.
@@ -93,6 +134,7 @@ Respond with JSON (no markdown):
       "layer": "primary",
       "app": { "name": "Chrome", "windowTitle": "Title", "category": "browser" },
       "browser": { "url": "full url", "domain": "domain.com", "pageTitle": "Title", "pageType": "article" },
+      "title": "TypeScript Sandboxes — codesandbox.io",
       "activity": "Reading blog post about TypeScript sandboxes",
       "summary": "Key searchable content for this layer. 1-2 sentences max.",
       "tags": ["searchable", "terms", "technologies"]
@@ -101,6 +143,7 @@ Respond with JSON (no markdown):
       "layer": "overlay",
       "app": { "name": "FaceTime", "category": "communication" },
       "communication": { "app": "FaceTime", "type": "video-call" },
+      "title": "FaceTime — John Smith",
       "activity": "Incoming FaceTime call from John Smith",
       "summary": "FaceTime video call notification from John Smith.",
       "tags": ["John Smith", "FaceTime"]
@@ -117,6 +160,7 @@ RULES:
 - FOCUS ON SEARCHABILITY per activity:
   - Extract the EXACT URL, article title, video title, repo name, file path
   - Tags should be search terms: project names, technologies, concepts, people
+  - Title = short headline for display (~8 words max). Use the page title, article name, repo name, video title, or document name when available. For terminals/IDEs: the project or file name. Format: "Content — Source" (e.g., "In Defense of AI Evals — Shreya Shankar", "pi-telemetry — GitHub", "auth.ts — VS Code")
   - Activity = what you'd type to find this ("reading Java CLI blog post", "debugging auth in pi-mono")
   - Summary = key facts that make this findable (author names, specific topics, error messages)
   - Skip generic info (window chrome, UI elements) - focus on CONTENT`;
@@ -141,6 +185,7 @@ interface RawActivity {
   terminal?: TerminalMetadata;
   communication?: CommunicationMetadata;
   document?: DocumentMetadata;
+  title?: string;
   activity: string;
   summary: string;
   tags: string[];
@@ -409,36 +454,44 @@ Extract all structured information from this screenshot.`;
 
     if (parsed.activities && Array.isArray(parsed.activities)) {
       // New multi-activity format
-      const activities: Activity[] = parsed.activities.map((raw: RawActivity) => ({
-        layer: raw.layer || "primary",
-        app: raw.app,
-        browser: cleanNulls<BrowserMetadata>(raw.browser),
-        video: cleanNulls<VideoMetadata>(raw.video),
-        ide: cleanNulls<IdeMetadata>(raw.ide),
-        terminal: cleanNulls<TerminalMetadata>(raw.terminal),
-        communication: cleanNulls<CommunicationMetadata>(raw.communication),
-        document: cleanNulls<DocumentMetadata>(raw.document),
-        activity: raw.activity,
-        summary: raw.summary,
-        tags: raw.tags || [],
-      }));
+      const activities: Activity[] = parsed.activities.map((raw: RawActivity) => {
+        const act: Activity = {
+          layer: raw.layer || "primary",
+          app: raw.app,
+          browser: cleanNulls<BrowserMetadata>(raw.browser),
+          video: cleanNulls<VideoMetadata>(raw.video),
+          ide: cleanNulls<IdeMetadata>(raw.ide),
+          terminal: cleanNulls<TerminalMetadata>(raw.terminal),
+          communication: cleanNulls<CommunicationMetadata>(raw.communication),
+          document: cleanNulls<DocumentMetadata>(raw.document),
+          title: raw.title || deriveTitle(raw),
+          activity: raw.activity,
+          summary: raw.summary,
+          tags: raw.tags || [],
+        };
+        return act;
+      });
       analysis = { activities, isContinuation: parsed.isContinuation ?? false };
     } else {
       // Legacy flat format — wrap into single-element activities array
       const legacy = parsed as LegacyAnalysisResult;
+      const raw: RawActivity = {
+        app: legacy.app,
+        browser: cleanNulls<BrowserMetadata>(legacy.browser),
+        video: cleanNulls<VideoMetadata>(legacy.video),
+        ide: cleanNulls<IdeMetadata>(legacy.ide),
+        terminal: cleanNulls<TerminalMetadata>(legacy.terminal),
+        communication: cleanNulls<CommunicationMetadata>(legacy.communication),
+        document: cleanNulls<DocumentMetadata>(legacy.document),
+        activity: legacy.activity,
+        summary: legacy.summary || legacy.details || "",
+        tags: legacy.tags || [],
+      };
       analysis = {
         activities: [{
           layer: "primary" as const,
-          app: legacy.app,
-          browser: cleanNulls<BrowserMetadata>(legacy.browser),
-          video: cleanNulls<VideoMetadata>(legacy.video),
-          ide: cleanNulls<IdeMetadata>(legacy.ide),
-          terminal: cleanNulls<TerminalMetadata>(legacy.terminal),
-          communication: cleanNulls<CommunicationMetadata>(legacy.communication),
-          document: cleanNulls<DocumentMetadata>(legacy.document),
-          activity: legacy.activity,
-          summary: legacy.summary || legacy.details || "",
-          tags: legacy.tags || [],
+          ...raw,
+          title: deriveTitle(raw),
         }],
         isContinuation: legacy.isContinuation ?? false,
       };
