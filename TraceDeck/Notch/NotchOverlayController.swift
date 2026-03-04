@@ -320,6 +320,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchResultsStack.orientation = .vertical
         searchResultsStack.alignment = .leading
         searchResultsStack.spacing = 4
+        searchResultsStack.translatesAutoresizingMaskIntoConstraints = false
 
         searchResultsScroll = NSScrollView()
         searchResultsScroll.documentView = searchResultsStack
@@ -329,6 +330,15 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
         searchResultsScroll.drawsBackground = false
         searchResultsScroll.scrollerStyle = .overlay
         searchPanel.addSubview(searchResultsScroll)
+
+        // Pin stack width to clip view so arranged subviews fill horizontally
+        if let clipView = searchResultsScroll.contentView as? NSClipView {
+            NSLayoutConstraint.activate([
+                searchResultsStack.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
+                searchResultsStack.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
+                searchResultsStack.topAnchor.constraint(equalTo: clipView.topAnchor),
+            ])
+        }
 
         searchPlaceholder = makeLabel("Type a query and press Enter", size: 12, weight: .regular, color: NotchOverlayConstants.dimText)
         searchPlaceholder.alignment = .center
@@ -541,9 +551,11 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        NSLog("[NotchSearch] doCommandBy: %@ control: %@", NSStringFromSelector(commandSelector), control === searchField ? "searchField" : "other")
         if commandSelector == #selector(insertNewline(_:)) {
             if control === searchField {
                 let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                NSLog("[NotchSearch] Enter pressed, query: '%@', callback nil? %d", query, onSearchSubmitted == nil ? 1 : 0)
                 if !query.isEmpty {
                     onSearchSubmitted?(query)
                 }
@@ -667,9 +679,10 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
         searchIcon.contentTintColor = .white
 
-        // Focus search field after animation
+        // Make window key and focus search field after animation
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self, self.isSearchMode else { return }
+            self.window?.makeKey()
             self.window?.makeFirstResponder(self.searchField)
         }
     }
@@ -681,6 +694,7 @@ private final class NotchOverlayContentView: NSView, NSTextFieldDelegate {
 
         searchField.stringValue = ""
         window?.makeFirstResponder(nil)
+        window?.resignKey()
         searchIcon.contentTintColor = NotchOverlayConstants.dimText
 
         // Hide search panel immediately
@@ -1022,6 +1036,7 @@ final class NotchOverlayController {
     // MARK: Search
 
     private func toggleSearch() {
+        NSLog("[NotchSearch] toggleSearch called, isSearchMode=%d", contentView.isSearchMode ? 1 : 0)
         if contentView.isSearchMode {
             // Exit search → collapse
             contentView.exitSearchMode()
@@ -1034,11 +1049,18 @@ final class NotchOverlayController {
         }
     }
 
+    private var isSearching = false
+
     private func performSearch(_ query: String) {
+        guard !isSearching else { return }
+        isSearching = true
+        NSLog("[NotchSearch] performSearch: '%@'", query)
         contentView.showSearchLoading()
         Task {
             let results = await ActivityAgentManager.shared.searchFTS(query)
+            NSLog("[NotchSearch] got %d results", results.count)
             await MainActor.run { [weak self] in
+                self?.isSearching = false
                 self?.contentView.showSearchResults(results)
             }
         }
