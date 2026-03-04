@@ -1082,43 +1082,12 @@ final class NotchOverlayController {
         contentView.showSearchLoading()
         Task {
             let results = await ActivityAgentManager.shared.searchFTS(query)
-            let deduped = Self.deduplicateResults(results)
-            NSLog("[NotchSearch] got %d results, %d after dedup", results.count, deduped.count)
+            NSLog("[NotchSearch] got %d results", results.count)
             await MainActor.run { [weak self] in
                 self?.isSearching = false
-                self?.contentView.showSearchResults(deduped)
+                self?.contentView.showSearchResults(results)
             }
         }
-    }
-
-    /// Deduplicate search results that describe the same activity.
-    /// Keeps the first (highest-ranked) result from each group.
-    /// Two results are considered duplicates if they share the same app
-    /// and their activity descriptions are similar (>70% word overlap).
-    private static func deduplicateResults(_ results: [ActivitySearchResult]) -> [ActivitySearchResult] {
-        var kept: [ActivitySearchResult] = []
-
-        for result in results {
-            let dominated = kept.contains { existing in
-                guard existing.appName == result.appName else { return false }
-                return wordSimilarity(existing.activity, result.activity) > 0.70
-            }
-            if !dominated {
-                kept.append(result)
-            }
-        }
-
-        return kept
-    }
-
-    /// Jaccard similarity over lowercased words.
-    private static func wordSimilarity(_ a: String, _ b: String) -> Double {
-        let wordsA = Set(a.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
-        let wordsB = Set(b.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
-        guard !wordsA.isEmpty || !wordsB.isEmpty else { return 1.0 }
-        let intersection = wordsA.intersection(wordsB).count
-        let union = wordsA.union(wordsB).count
-        return Double(intersection) / Double(union)
     }
 
     // MARK: Teardown
