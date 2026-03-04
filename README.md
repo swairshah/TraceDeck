@@ -1,33 +1,35 @@
-# Monitome
+<h1>  <img src="assets/icon_128.png" alt="TraceDeck icon" width="30"/> TraceDeck</h1>
 
-A minimal macOS screen recording app that captures periodic screenshots for analysis.
+**Personal context capture for macOS.** All data stays local. TraceDeck quietly indexes your screen activity, analyzes it with the LLM of your choice, and builds a searchable knowledge base of everything you've seen and done.
 
-- Periodic screenshot capture using ScreenCaptureKit (macOS 13+)
-- Multi-display support (captures active display)
-- GRDB/SQLite storage with automatic cleanup
-- Menu bar icon with quick controls
-- Event-triggered capture (app switch, tab change)
+Use it as a personal bookmark engine, a knowledge database, or a context cartridge you can plug into any LLM or chatbot — bootstrapping it with *your* knowledge.
+
+- Continuous screen capture via ScreenCaptureKit (macOS 13+)
+- Event-triggered capture on app switch and browser tab change
+- Contextual indexing of all activity with a local search API
+- All data stays on your machine — you choose which LLM analyzes it
+- Multi-display support, GRDB/SQLite storage with automatic cleanup
 
 ## Install
 
 ```bash
 brew tap swairshah/tap
-brew install --cask monitome
+brew install --cask tracedeck
 ```
 
-Or download from [Releases](https://github.com/swairshah/Monitome/releases).
+Or download from [Releases](https://github.com/swairshah/TraceDeck/releases).
 
 ## Configuration
 
 - **Screenshot interval**: Default 10 seconds (configurable in Settings)
 - **Storage limit**: Default 5 GB, auto-purges oldest screenshots
-- **Storage location**: `~/Library/Application Support/Monitome/recordings/`
+- **Storage location**: `~/Library/Application Support/TraceDeck/recordings/`
 
 ## Dev
 
 ### Build
 
-1. Open `Monitome.xcodeproj` in Xcode
+1. Open `TraceDeck.xcodeproj` in Xcode
 2. Add GRDB if missing: File → Add Package Dependencies → `https://github.com/groue/GRDB.swift.git`
 3. Cmd+R to build and run
 
@@ -37,17 +39,17 @@ Or download from [Releases](https://github.com/swairshah/Monitome/releases).
 # In Xcode: Product → Archive → Distribute App → Direct Distribution → Export
 
 # Create DMG
-mkdir -p dist && cp -r /path/to/Monitome.app dist/
-hdiutil create -volname "Monitome" -srcfolder dist -ov -format UDZO Monitome-1.0.0.dmg
+mkdir -p dist && cp -r /path/to/TraceDeck.app dist/
+hdiutil create -volname "TraceDeck" -srcfolder dist -ov -format UDZO TraceDeck-1.0.0.dmg
 
 # Release
-gh release create v1.0.0 Monitome-1.0.0.dmg
+gh release create v1.0.0 TraceDeck-1.0.0.dmg
 ```
 
 ### Project Structure
 
 ```
-Monitome/
+TraceDeck/
 ├── App/                  # Entry point, app delegate, state
 ├── Recording/            # ScreenCaptureKit, storage, display tracking
 ├── Views/                # SwiftUI views
