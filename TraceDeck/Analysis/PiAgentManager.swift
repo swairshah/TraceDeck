@@ -25,6 +25,12 @@ final class PiAgentManager: ObservableObject {
     
     /// Session directory for Pi
     private let sessionDir: URL
+
+    /// Isolated Pi config directory (replaces ~/.pi/agent)
+    private let piConfigDir: URL
+    
+    /// Isolated Pi package directory
+    private let piPackageDir: URL
     
     /// Whether pi binary exists
     var isPiAvailable: Bool {
@@ -40,9 +46,14 @@ final class PiAgentManager: ObservableObject {
         // Data directory
         self.dataDir = AppIdentity.appSupportBaseURL()
         self.sessionDir = dataDir.appendingPathComponent("sessions/tracedeck")
+        self.piConfigDir = dataDir.appendingPathComponent("pi-agent")
+        self.piPackageDir = dataDir.appendingPathComponent("pi-packages")
         
-        // Create session directory if needed
+        // Create runtime directories if needed
+        // Note: Don't create piPackageDir - an empty directory causes Pi to crash
+        // looking for package.json. Pi will create it if needed.
         try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: piConfigDir, withIntermediateDirectories: true)
         
         // Look for pi in common locations - prefer bundled binary
         let bundleMacOS = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/pi").path
@@ -136,6 +147,10 @@ final class PiAgentManager: ObservableObject {
         // Keep legacy key for backward compatibility with older extension builds.
         env["MONITOME_DATA_DIR"] = dataDir.path
         
+        // Fully isolate embedded Pi from user-global configuration/resources.
+        env["PI_CODING_AGENT_DIR"] = piConfigDir.path
+        env["PI_PACKAGE_DIR"] = piPackageDir.path
+        
         return env
     }
     
@@ -211,7 +226,10 @@ final class PiAgentManager: ObservableObject {
     private func buildPiArgs(message: String, continueSession: Bool) -> [String] {
         var args: [String] = []
         
-        // Extension
+        // Run Pi in isolated resource mode:
+        // - disable auto-discovery from ~/.pi/agent and project .pi/*
+        // - load only the bundled TraceDeck extension explicitly
+        args += ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes"]
         args += ["--extension", extensionPath]
         
         // Session management
