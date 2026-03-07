@@ -14,7 +14,7 @@ private enum NotchOverlayConstants {
     static let searchExpandedWidth: CGFloat = 420
     static let searchExpandedHeight: CGFloat = 340
 
-    static let collapsedHeightWithNotch: CGFloat = 36
+    static let collapsedHeightWithNotch: CGFloat = 33
     static let collapsedHeightWithoutNotch: CGFloat = 25
     static let shoulderSizeWithNotch: CGFloat = 16
     static let shoulderSizeWithoutNotch: CGFloat = 12
