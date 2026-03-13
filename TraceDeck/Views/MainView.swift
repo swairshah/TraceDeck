@@ -254,10 +254,14 @@ struct MainView: View {
             ScreenshotDetailView(screenshot: screenshot)
         }
         .sheet(isPresented: $showPermissionsOnboarding) {
-            PermissionsOnboardingView {
-                showPermissionsOnboarding = false
-            }
-            .interactiveDismissDisabled(true)
+            PermissionsOnboardingView(
+                onContinue: {
+                    showPermissionsOnboarding = false
+                },
+                onDismiss: {
+                    showPermissionsOnboarding = false
+                }
+            )
         }
         .sheet(isPresented: $showActivityLog) {
             ActivityLogView()

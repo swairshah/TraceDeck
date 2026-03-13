@@ -4,9 +4,11 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct PermissionsOnboardingView: View {
     let onContinue: () -> Void
+    let onDismiss: () -> Void
 
     @State private var screenRecordingGranted = PermissionsManager.isScreenRecordingGranted
     @State private var accessibilityGranted = PermissionsManager.isAccessibilityGranted
@@ -59,6 +61,24 @@ struct PermissionsOnboardingView: View {
             .controlSize(.large)
             .disabled(!screenRecordingGranted)
 
+            HStack(spacing: 10) {
+                Button("Close for now") {
+                    onDismiss()
+                }
+                .buttonStyle(.bordered)
+
+                Button("Quit TraceDeck") {
+                    NSApp.terminate(nil)
+                }
+                .buttonStyle(.bordered)
+
+                Button("Quit && Reopen") {
+                    relaunchApp()
+                }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+
             if !screenRecordingGranted {
                 Text("Enable Screen Recording to continue.")
                     .font(.caption)
@@ -90,6 +110,21 @@ struct PermissionsOnboardingView: View {
     private func refreshPermissions() {
         screenRecordingGranted = PermissionsManager.isScreenRecordingGranted
         accessibilityGranted = PermissionsManager.isAccessibilityGranted
+    }
+
+    private func relaunchApp() {
+        let appBundlePath = Bundle.main.bundlePath
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", appBundlePath]
+
+        do {
+            try task.run()
+        } catch {
+            NSLog("[PermissionsOnboarding] Failed to relaunch app: \(error)")
+        }
+
+        NSApp.terminate(nil)
     }
 }
 
@@ -141,5 +176,8 @@ private struct PermissionSetupRow: View {
 }
 
 #Preview {
-    PermissionsOnboardingView(onContinue: {})
+    PermissionsOnboardingView(
+        onContinue: {},
+        onDismiss: {}
+    )
 }
