@@ -29,9 +29,6 @@ final class PiAgentManager: ObservableObject {
     /// Isolated Pi config directory (replaces ~/.pi/agent)
     private let piConfigDir: URL
     
-    /// Isolated Pi package directory
-    private let piPackageDir: URL
-    
     /// Whether pi binary exists
     var isPiAvailable: Bool {
         FileManager.default.fileExists(atPath: piPath)
@@ -47,11 +44,10 @@ final class PiAgentManager: ObservableObject {
         self.dataDir = AppIdentity.appSupportBaseURL()
         self.sessionDir = dataDir.appendingPathComponent("sessions/tracedeck")
         self.piConfigDir = dataDir.appendingPathComponent("pi-agent")
-        self.piPackageDir = dataDir.appendingPathComponent("pi-packages")
         
-        // Create runtime directories if needed
-        // Note: Don't create piPackageDir - an empty directory causes Pi to crash
-        // looking for package.json. Pi will create it if needed.
+        // Create runtime directories if needed.
+        // Important: Do not override PI_PACKAGE_DIR; bundled Pi resolves
+        // package assets (package.json, docs, themes) next to its binary.
         try? FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: piConfigDir, withIntermediateDirectories: true)
         
@@ -147,9 +143,9 @@ final class PiAgentManager: ObservableObject {
         // Keep legacy key for backward compatibility with older extension builds.
         env["MONITOME_DATA_DIR"] = dataDir.path
         
-        // Fully isolate embedded Pi from user-global configuration/resources.
+        // Isolate Pi user config from ~/.pi/agent.
+        // Do not set PI_PACKAGE_DIR; it breaks bundled Pi asset resolution.
         env["PI_CODING_AGENT_DIR"] = piConfigDir.path
-        env["PI_PACKAGE_DIR"] = piPackageDir.path
         
         return env
     }
