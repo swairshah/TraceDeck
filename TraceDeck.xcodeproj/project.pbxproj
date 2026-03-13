@@ -270,7 +270,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\nAGENT_SOURCE=\"${SRCROOT}/activity-agent/dist/activity-agent\"\nAGENT_DEST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/activity-agent\"\n\nif [ -f \"$AGENT_SOURCE\" ]; then\n    cp \"$AGENT_SOURCE\" \"$AGENT_DEST\"\n    chmod +x \"$AGENT_DEST\"\nelse\n    echo \"warning: activity-agent not found at $AGENT_SOURCE\"\nfi\n";
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\nAGENT_SOURCE=\"${SRCROOT}/activity-agent/dist/activity-agent\"\nAGENT_DEST=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/activity-agent\"\n\nif [ -f \"$AGENT_SOURCE\" ]; then\n    cp \"$AGENT_SOURCE\" \"$AGENT_DEST\"\n    chmod +x \"$AGENT_DEST\"\n\n    if [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n        codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --timestamp=none \"$AGENT_DEST\"\n    else\n        codesign --force --sign - --timestamp=none \"$AGENT_DEST\"\n    fi\nelse\n    echo \"warning: activity-agent not found at $AGENT_SOURCE\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

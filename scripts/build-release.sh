@@ -2,7 +2,7 @@
 set -e
 
 # Configuration
-APP_NAME="Monitome"
+APP_NAME="TraceDeck"
 VERSION="${1:-0.1.0}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -86,8 +86,8 @@ if [ -f "$AGENT_BINARY" ]; then
     mv "$AGENT_BINARY" "$AGENT_BINARY.tmp"
 fi
 
-xcodebuild -project Monitome.xcodeproj \
-    -scheme Monitome \
+xcodebuild -project TraceDeck.xcodeproj \
+    -scheme TraceDeck \
     -configuration Release \
     -derivedDataPath "$DIST_DIR/build" \
     -arch arm64 -arch x86_64 \
@@ -137,8 +137,8 @@ cp "$PI_BUILD_DIR/package.json" "$APP_BUNDLE/Contents/Resources/"
 ln -s ../Resources/package.json "$APP_BUNDLE/Contents/MacOS/package.json"
 
 # Copy bundled extension (self-contained, no external imports except better-sqlite3)
-mkdir -p "$APP_BUNDLE/Contents/Resources/extensions/monitome-search"
-cp "$PROJECT_DIR/activity-agent/dist/extension-bundle.js" "$APP_BUNDLE/Contents/Resources/extensions/monitome-search/index.js"
+mkdir -p "$APP_BUNDLE/Contents/Resources/extensions/tracedeck-search"
+cp "$PROJECT_DIR/activity-agent/dist/extension-bundle.js" "$APP_BUNDLE/Contents/Resources/extensions/tracedeck-search/index.js"
 
 # Sign inside-out: inner components first, then main binary, then bundle
 
@@ -162,7 +162,7 @@ codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" \
 # 7. Sign the main app binary
 echo "Signing main app binary..."
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" \
-    "$APP_BUNDLE/Contents/MacOS/Monitome"
+    "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
 # 8. Sign the app bundle (top-level, preserves individual signatures)
 echo "Signing app bundle..."

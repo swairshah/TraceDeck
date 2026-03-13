@@ -541,6 +541,11 @@ export class SearchIndex {
           terminal: entry.terminal,
           communication: entry.communication,
           document: entry.document,
+          title: entry.browser?.pageTitle
+            || entry.document?.documentTitle
+            || entry.ide?.currentFile
+            || entry.app?.windowTitle
+            || entry.activity,
           activity: entry.activity,
           summary: entry.summary || entry.details || "",
           tags: entry.tags || [],
