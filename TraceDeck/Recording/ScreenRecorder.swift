@@ -281,7 +281,26 @@ final class ScreenRecorder: NSObject {
             let fileURL = StorageManager.shared.nextScreenshotURL()
             try jpegData.write(to: fileURL)
 
-            let screenshotId = StorageManager.shared.saveScreenshot(url: fileURL, capturedAt: captureTime, reason: reason)
+            var sessionID = await MainActor.run { AppState.shared.currentSessionID }
+            if sessionID == nil {
+                let isRecordingNow = await MainActor.run { AppState.shared.isRecording }
+                if isRecordingNow,
+                   let fallbackSessionID = StorageManager.shared.startWorkflowSession(
+                    startedAt: captureTime,
+                    note: await MainActor.run { AppState.shared.sessionNoteDraft }
+                   ) {
+                    await MainActor.run {
+                        AppState.shared.attachWorkflowSession(id: fallbackSessionID, startedAt: captureTime)
+                    }
+                    sessionID = fallbackSessionID
+                }
+            }
+            let screenshotId = StorageManager.shared.saveScreenshot(
+                url: fileURL,
+                capturedAt: captureTime,
+                reason: reason,
+                sessionID: sessionID
+            )
 
             // Post notification for analysis integration
             NotificationCenter.default.post(
