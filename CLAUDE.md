@@ -6,8 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Swift App (macOS)
 ```bash
-open Monitome.xcodeproj   # Open in Xcode
-# Cmd+R to build and run
+./run.sh
+```
+
+Use `./run.sh` instead of launching directly from Xcode/DerivedData when possible.  
+It builds to a stable path (`build/Build/Products/Debug/TraceDeck.app`), resets stale Accessibility TCC entries, and guides re-granting permissions.
+
+Quick permission-only recovery (no rebuild):
+```bash
+./fix-permissions.sh
+```
+
+Optional full permission reset (Accessibility + Microphone + ScreenCapture):
+```bash
+RESET_ALL_PERMISSIONS=1 ./run.sh
 ```
 
 Requires package dependencies:
