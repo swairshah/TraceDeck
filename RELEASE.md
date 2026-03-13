@@ -1,127 +1,81 @@
-# Release Guide
+# Release Guide (TraceDeck)
 
 ## Quick Release
 
 ```bash
-# 1. Build the release DMG
-./scripts/build-release.sh 0.1.0
+# 1. Build, sign, and create notarized DMG (if credentials are set)
+APPLE_ID="swairshah@gmail.com" APP_PASSWORD="$(grep '^APPLE_APP_PASSWORD=' ~/.env | cut -d= -f2-)" ./scripts/build-release.sh 1.0.1
 
 # 2. Create GitHub release and upload DMG
-gh release create v0.1.0 dist/Monitome-0.1.0.dmg --title "v0.1.0" --notes "Initial release"
+gh release create v1.0.1 dist/TraceDeck-1.0.1.dmg --title "TraceDeck v1.0.1" --notes "Bugfix release"
 
-# 3. Update Homebrew tap with the SHA256 from build output
+# 3. Update Homebrew tap cask (tracedeck.rb) with new version + SHA256
 ```
 
 ## Manual Steps
 
-### 1. Build Release
+### 1) Build release artifact
 
 ```bash
-./scripts/build-release.sh 0.1.0
+./scripts/build-release.sh 1.0.1
 ```
 
-This will:
-- Build the activity-agent (Bun compiled binary)
-- Build the Swift app (Release configuration)
-- Bundle activity-agent into the .app
-- Create a DMG
-- Output the SHA256
+This script:
+- Builds `activity-agent` (universal binary)
+- Builds bundled extension (`extension-bundle.js`)
+- Builds bundled `pi` (universal binary)
+- Builds the Swift app (`TraceDeck`, Release)
+- Bundles binaries/extensions into `TraceDeck.app`
+- Signs app + embedded binaries
+- Creates DMG in `dist/`
+- Notarizes + staples DMG when `APPLE_ID` + `APP_PASSWORD` are provided
+- Prints SHA256 for Homebrew cask update
 
-### 2. Create GitHub Release
+### 2) Publish GitHub release
 
-1. Go to https://github.com/swairshah/Monitome/releases/new
-2. Tag: `v0.1.0`
-3. Title: `v0.1.0`
-4. Upload: `dist/Monitome-0.1.0.dmg`
-5. Publish
-
-Or use GitHub CLI:
 ```bash
-gh release create v0.1.0 dist/Monitome-0.1.0.dmg --title "v0.1.0" --notes "Initial release"
+gh release create v1.0.1 dist/TraceDeck-1.0.1.dmg \
+  --repo swairshah/TraceDeck \
+  --title "TraceDeck v1.0.1" \
+  --notes "Release notes"
 ```
 
-### 3. Update Homebrew Tap
+### 3) Update Homebrew tap
 
-Copy `homebrew/monitome.rb` to your tap repo and update the SHA256:
+Tap repo: `~/work/projects/homebrew-tap`
+Cask: `Casks/tracedeck.rb`
 
 ```bash
-# Clone your tap
-cd ~/work/projects
-git clone https://github.com/swairshah/homebrew-tap.git
-cd homebrew-tap
-
-# Copy and update the formula
-cp ../Monitome/homebrew/monitome.rb Casks/monitome.rb
-
-# Edit Casks/monitome.rb and replace PLACEHOLDER_SHA256 with actual SHA256
-
-# Commit and push
-git add Casks/monitome.rb
-git commit -m "Add monitome cask v0.1.0"
+cd ~/work/projects/homebrew-tap
+# Edit Casks/tracedeck.rb: bump version + sha256
+git add Casks/tracedeck.rb
+git commit -m "Update tracedeck to v1.0.1"
 git push
 ```
 
-### 4. Test Installation
+### 4) Verify install
 
 ```bash
-# Install
-brew install --cask swairshah/tap/monitome
-
-# Or if tap not added yet
 brew tap swairshah/tap
-brew install --cask monitome
+brew install --cask tracedeck
 ```
 
-## Code Signing & Notarization (Optional but Recommended)
+## Optional: Manual notarization commands
 
-For distribution without Gatekeeper warnings:
-
-### 1. Sign the App
+If you need to notarize manually:
 
 ```bash
-# Sign with Developer ID
-codesign --deep --force --verify --verbose \
-    --sign "Developer ID Application: Your Name (TEAM_ID)" \
-    --options runtime \
-    dist/Monitome.app
+xcrun notarytool submit dist/TraceDeck-1.0.1.dmg \
+  --apple-id "swairshah@gmail.com" \
+  --team-id "8B9YURJS4G" \
+  --password "$(grep '^APPLE_APP_PASSWORD=' ~/.env | cut -d= -f2-)" \
+  --wait
 
-# Sign the activity-agent binary specifically
-codesign --force --verify --verbose \
-    --sign "Developer ID Application: Your Name (TEAM_ID)" \
-    --options runtime \
-    dist/Monitome.app/Contents/MacOS/activity-agent
+xcrun stapler staple dist/TraceDeck-1.0.1.dmg
 ```
 
-### 2. Notarize
+## Version bump checklist
 
-```bash
-# Create zip for notarization
-ditto -c -k --keepParent dist/Monitome.app dist/Monitome.zip
-
-# Submit for notarization
-xcrun notarytool submit dist/Monitome.zip \
-    --apple-id "your@email.com" \
-    --team-id "TEAM_ID" \
-    --password "app-specific-password" \
-    --wait
-
-# Staple the notarization ticket
-xcrun stapler staple dist/Monitome.app
-```
-
-### 3. Then Create DMG
-
-```bash
-# Create DMG from notarized app
-hdiutil create -volname "Monitome" \
-    -srcfolder dist/Monitome.app \
-    -ov -format UDZO \
-    dist/Monitome-0.1.0.dmg
-```
-
-## Version Bumping
-
-Update version in:
-1. `Monitome.xcodeproj` (MARKETING_VERSION)
-2. `activity-agent/package.json`
-3. `homebrew/monitome.rb`
+- `TraceDeck.xcodeproj` (`MARKETING_VERSION`)
+- Any user-facing version strings (if applicable)
+- `~/work/projects/homebrew-tap/Casks/tracedeck.rb`
