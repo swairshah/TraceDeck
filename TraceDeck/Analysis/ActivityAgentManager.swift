@@ -53,8 +53,11 @@ struct ActivityLogEntry: Identifiable {
 final class ActivityAgentManager: ObservableObject {
     static let shared = ActivityAgentManager()
     
-    /// Path to the activity-agent binary
-    private let agentPath: String
+    /// Path to the Bun runtime binary
+    private let bunPath: String
+
+    /// Path to the activity-agent JS script
+    private let scriptPath: String
     
     /// Data directory (Application Support/TraceDeck)
     private let dataDir: String
@@ -77,59 +80,73 @@ final class ActivityAgentManager: ObservableObject {
     /// Maximum log entries to keep
     private let maxLogEntries = 100
     
-    /// Whether the agent binary exists
+    /// Whether the bun runtime and agent script both exist
     var isAgentAvailable: Bool {
-        FileManager.default.fileExists(atPath: agentPath)
+        FileManager.default.fileExists(atPath: bunPath) &&
+        FileManager.default.fileExists(atPath: scriptPath)
     }
     
     private init() {
-        // Look for activity-agent in common locations
-        let bundleMacOS = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/activity-agent").path
-        let bundleResources = Bundle.main.resourcePath.map { $0 + "/activity-agent" } ?? ""
-        
+        // Resolve the Bun runtime binary
+        let bundledBun = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/bun").path
+
         #if DEBUG
-        // In development, prefer the source binary so code changes are picked up
-        // immediately without relying on whatever binary got copied into the app bundle.
-        let possiblePaths = [
-            NSHomeDirectory() + "/work/projects/ctxl/activity-agent/dist/activity-agent",
-            NSHomeDirectory() + "/work/projects/TraceDeck/activity-agent/dist/activity-agent",
-            // In the app bundle's MacOS folder
-            bundleMacOS,
-            // In the app bundle's Resources
-            bundleResources,
-            // Installed via brew or manually
-            "/usr/local/bin/activity-agent",
-            "/opt/homebrew/bin/activity-agent",
-            NSHomeDirectory() + "/.local/bin/activity-agent"
+        let possibleBunPaths = [
+            bundledBun,
+            "/opt/homebrew/bin/bun",
+            "/usr/local/bin/bun",
+            NSHomeDirectory() + "/.bun/bin/bun"
         ]
         #else
-        let possiblePaths = [
-            // In the app bundle's MacOS folder (preferred for executables)
-            bundleMacOS,
-            // In the app bundle's Resources
-            bundleResources,
-            // Installed via brew or manually
-            "/usr/local/bin/activity-agent",
-            "/opt/homebrew/bin/activity-agent",
-            NSHomeDirectory() + "/.local/bin/activity-agent"
+        let possibleBunPaths = [
+            bundledBun,
+            "/opt/homebrew/bin/bun",
+            "/usr/local/bin/bun"
         ]
         #endif
-        
-        let foundPath = possiblePaths.first { FileManager.default.fileExists(atPath: $0) }
-        self.agentPath = foundPath ?? "/usr/local/bin/activity-agent"
-        
-        if let foundPath = foundPath {
-            print("Activity agent found at: \(foundPath)")
+
+        let foundBun = possibleBunPaths.first { FileManager.default.fileExists(atPath: $0) }
+        self.bunPath = foundBun ?? bundledBun
+
+        // Resolve the activity-agent JS script
+        let bundledScript = Bundle.main.resourcePath.map { $0 + "/scripts/activity-agent.js" } ?? ""
+
+        #if DEBUG
+        let possibleScriptPaths = [
+            NSHomeDirectory() + "/work/projects/TraceDeck/activity-agent/dist/activity-agent.js",
+            NSHomeDirectory() + "/work/projects/ctxl/activity-agent/dist/activity-agent.js",
+            bundledScript
+        ]
+        #else
+        let possibleScriptPaths = [
+            bundledScript
+        ]
+        #endif
+
+        let foundScript = possibleScriptPaths.first { FileManager.default.fileExists(atPath: $0) }
+        self.scriptPath = foundScript ?? bundledScript
+
+        if let foundBun = foundBun {
+            print("Bun runtime found at: \(foundBun)")
         } else {
-            print("Activity agent NOT found. Searched paths:")
-            for path in possiblePaths {
+            print("Bun runtime NOT found. Searched paths:")
+            for path in possibleBunPaths {
                 print("  - \(path)")
             }
         }
-        
+
+        if let foundScript = foundScript {
+            print("Activity agent script found at: \(foundScript)")
+        } else {
+            print("Activity agent script NOT found. Searched paths:")
+            for path in possibleScriptPaths {
+                print("  - \(path)")
+            }
+        }
+
         // Data directory
         self.dataDir = AppIdentity.appSupportBaseURL().path
-        
+
         // Load initial stats
         Task {
             await refreshStats()
@@ -141,7 +158,7 @@ final class ActivityAgentManager: ObservableObject {
     /// Start periodic indexing (every 60 seconds)
     func startPeriodicIndexing() {
         guard isAgentAvailable else {
-            log("Activity agent not found at \(agentPath)", type: .error)
+            log("Activity agent not found (bun: \(bunPath), script: \(scriptPath))", type: .error)
             return
         }
         
@@ -616,8 +633,8 @@ final class ActivityAgentManager: ObservableObject {
     
     private func runAgent(_ arguments: [String]) async throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: agentPath)
-        process.arguments = ["--data", dataDir] + arguments
+        process.executableURL = URL(fileURLWithPath: bunPath)
+        process.arguments = ["run", scriptPath, "--data", dataDir] + arguments
         process.environment = getEnvironment()
         
         let pipe = Pipe()
@@ -649,8 +666,8 @@ final class ActivityAgentManager: ObservableObject {
     /// Run agent with streaming output
     private func runAgentWithStreaming(_ arguments: [String], onLine: @escaping (String) -> Void) async throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: agentPath)
-        process.arguments = ["--data", dataDir] + arguments
+        process.executableURL = URL(fileURLWithPath: bunPath)
+        process.arguments = ["run", scriptPath, "--data", dataDir] + arguments
         process.environment = getEnvironment()
         
         let pipe = Pipe()

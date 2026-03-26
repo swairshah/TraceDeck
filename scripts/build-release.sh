@@ -22,23 +22,38 @@ echo "Building $APP_NAME v$VERSION..."
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
-# 1. Build the activity-agent binary (Universal: ARM64 + x86_64)
-echo "Building activity-agent (universal binary)..."
+# 1. Bundle activity-agent as JS (no compiled binary — uses shared Bun runtime)
+echo "Building activity-agent JS bundle..."
 cd "$PROJECT_DIR/activity-agent"
 npm install --silent 2>/dev/null || true
-
-# Build for both architectures
-echo "  Building for ARM64..."
-bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile dist/activity-agent-arm64
-echo "  Building for x86_64..."
-bun build src/cli.ts --compile --target=bun-darwin-x64 --outfile dist/activity-agent-x64
-echo "  Creating universal binary..."
-lipo -create -output dist/activity-agent dist/activity-agent-arm64 dist/activity-agent-x64
-rm dist/activity-agent-arm64 dist/activity-agent-x64
+bun build src/cli.ts --target=bun --outfile dist/activity-agent.js
 
 # Build TypeScript (includes extension)
 echo "Building extension..."
 npm run build
+
+# 1b. Download Bun runtime (Universal: ARM64 + x86_64)
+echo "Preparing Bun runtime (universal binary)..."
+BUN_VERSION=$(bun --version)
+BUN_BUILD_DIR="$DIST_DIR/bun-build"
+rm -rf "$BUN_BUILD_DIR"
+mkdir -p "$BUN_BUILD_DIR"
+
+echo "  Downloading Bun v${BUN_VERSION} for ARM64..."
+curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-darwin-aarch64.zip" \
+    -o "$BUN_BUILD_DIR/bun-arm64.zip"
+unzip -qo "$BUN_BUILD_DIR/bun-arm64.zip" -d "$BUN_BUILD_DIR/arm64"
+
+echo "  Downloading Bun v${BUN_VERSION} for x86_64..."
+curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-darwin-x64.zip" \
+    -o "$BUN_BUILD_DIR/bun-x64.zip"
+unzip -qo "$BUN_BUILD_DIR/bun-x64.zip" -d "$BUN_BUILD_DIR/x64"
+
+echo "  Creating universal binary..."
+lipo -create \
+    -output "$BUN_BUILD_DIR/bun" \
+    "$BUN_BUILD_DIR/arm64/bun-darwin-aarch64/bun" \
+    "$BUN_BUILD_DIR/x64/bun-darwin-x64/bun"
 
 # 2. Build Pi binary (Universal: ARM64 + x86_64)
 echo "Building Pi binary (universal binary)..."
@@ -79,13 +94,6 @@ cp "$PI_PKG_DIR/dist/modes/interactive/theme"/*.json "$PI_BUILD_DIR/theme/"
 echo "Building Swift app (universal binary)..."
 cd "$PROJECT_DIR"
 
-# Temporarily hide the activity-agent binary so Xcode's copy script phase
-# is a no-op — we handle copying + signing ourselves below.
-AGENT_BINARY="$PROJECT_DIR/activity-agent/dist/activity-agent"
-if [ -f "$AGENT_BINARY" ]; then
-    mv "$AGENT_BINARY" "$AGENT_BINARY.tmp"
-fi
-
 xcodebuild -project TraceDeck.xcodeproj \
     -scheme TraceDeck \
     -configuration Release \
@@ -98,11 +106,6 @@ xcodebuild -project TraceDeck.xcodeproj \
     CODE_SIGN_STYLE=Manual \
     2>&1 | grep -E "(error:|warning:|BUILD|Signing)" || true
 
-# Restore the activity-agent binary
-if [ -f "$AGENT_BINARY.tmp" ]; then
-    mv "$AGENT_BINARY.tmp" "$AGENT_BINARY"
-fi
-
 # 3. Copy the app
 APP_PATH="$DIST_DIR/build/Build/Products/Release/$APP_NAME.app"
 if [ ! -d "$APP_PATH" ]; then
@@ -113,14 +116,19 @@ fi
 cp -R "$APP_PATH" "$DIST_DIR/"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 
-# 4. Copy activity-agent into the app bundle
-echo "Bundling activity-agent..."
-cp "$PROJECT_DIR/activity-agent/dist/activity-agent" "$APP_BUNDLE/Contents/MacOS/"
-chmod +x "$APP_BUNDLE/Contents/MacOS/activity-agent"
+# 4. Bundle shared Bun runtime
+echo "Bundling Bun runtime..."
+cp "$BUN_BUILD_DIR/bun" "$APP_BUNDLE/Contents/MacOS/bun"
+chmod +x "$APP_BUNDLE/Contents/MacOS/bun"
 
-# Remove any stray copies in Resources (Xcode might copy them there)
+# Remove any stray copies in Resources
 rm -f "$APP_BUNDLE/Contents/Resources/activity-agent"
 rm -f "$APP_BUNDLE/Contents/Resources/pi"
+
+# 4a. Copy activity-agent JS bundle to Resources
+echo "Bundling activity-agent script..."
+mkdir -p "$APP_BUNDLE/Contents/Resources/scripts"
+cp "$PROJECT_DIR/activity-agent/dist/activity-agent.js" "$APP_BUNDLE/Contents/Resources/scripts/"
 
 # 4b. Copy Pi binary and extension into the app bundle
 echo "Bundling Pi..."
@@ -147,11 +155,11 @@ echo "Signing frameworks..."
 find "$APP_BUNDLE/Contents/Frameworks" -type f \( -name "*.dylib" -o -perm +111 \) -exec \
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" {} \; 2>/dev/null || true
 
-# 6. Sign activity-agent WITH hardened runtime AND JIT entitlements
-echo "Signing activity-agent binary (with JIT entitlements)..."
+# 6. Sign shared Bun runtime WITH hardened runtime AND JIT entitlements
+echo "Signing Bun runtime (with JIT entitlements)..."
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" \
     --entitlements "$PROJECT_DIR/activity-agent/entitlements.plist" \
-    "$APP_BUNDLE/Contents/MacOS/activity-agent"
+    "$APP_BUNDLE/Contents/MacOS/bun"
 
 # 6b. Sign Pi binary WITH hardened runtime AND JIT entitlements
 echo "Signing Pi binary (with JIT entitlements)..."
@@ -194,6 +202,8 @@ codesign --force --sign "$SIGN_IDENTITY" "$DMG_NAME"
 # Cleanup temp files
 rm -rf dmg_contents
 rm -rf build
+rm -rf bun-build
+rm -rf pi-build
 
 # 8. Notarize (if credentials provided)
 if [ -n "$APPLE_ID" ] && [ -n "$APP_PASSWORD" ]; then
