@@ -12,7 +12,7 @@ SCHEME="TraceDeck"
 DERIVED_DATA_PATH="build"
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug/$APP_NAME.app"
 
-AGENT_BINARY="activity-agent/dist/activity-agent"
+AGENT_SCRIPT="activity-agent/dist/activity-agent.js"
 AGENT_EXTENSION="activity-agent/dist/extension-bundle.js"
 
 # Colors
@@ -33,12 +33,12 @@ for legacy_name in "${LEGACY_PROCESS_NAMES[@]}"; do
 done
 
 # Build activity-agent artifacts if missing
-if [ ! -f "$AGENT_BINARY" ] || [ ! -f "$AGENT_EXTENSION" ]; then
+if [ ! -f "$AGENT_SCRIPT" ] || [ ! -f "$AGENT_EXTENSION" ]; then
     echo -e "${YELLOW}Building activity-agent artifacts...${NC}"
     if [ ! -d "activity-agent/node_modules" ]; then
         (cd activity-agent && npm install --silent)
     fi
-    (cd activity-agent && npm run build:binary && npm run build:extension)
+    (cd activity-agent && npm run build:bundle && npm run build:extension)
 fi
 
 # Build the app

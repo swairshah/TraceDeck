@@ -9,6 +9,7 @@
     "postinstall": "npm rebuild better-sqlite3 2>/dev/null || true",
     "build": "tsc && npm run build:extension",
     "build:binary": "bun build src/cli.ts --compile --outfile dist/activity-agent",
+    "build:bundle": "bun build src/cli.ts --target=bun --outfile dist/activity-agent.js",
     "build:extension": "bun build src/extension/index.ts --outfile dist/extension-bundle.js --target node --format esm --external better-sqlite3",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
