@@ -30,6 +30,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create status bar controller
         statusBar = StatusBarController()
+        statusBar.onRightClick = { [weak self] in
+            self?.recorder.captureNow(reason: .manual)
+        }
 
         // Create notch bezel only if enabled (default: on)
         if UserDefaults.standard.object(forKey: "bezelEnabled") == nil {

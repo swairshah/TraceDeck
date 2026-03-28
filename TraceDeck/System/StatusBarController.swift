@@ -15,13 +15,17 @@ final class StatusBarController {
     private var popover: NSPopover!
     private var recordingSub: AnyCancellable?
 
+    /// Called on right-click of the menu bar icon.
+    var onRightClick: (() -> Void)?
+
     init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.length = 34
 
         if let button = statusItem.button {
             updateIcon(isRecording: AppState.shared.isRecording)
-            button.action = #selector(togglePopover)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.action = #selector(handleClick(_:))
             button.target = self
         }
 
@@ -59,7 +63,18 @@ final class StatusBarController {
         }
     }
 
-    @objc private func togglePopover() {
+    @objc private func handleClick(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+
+        switch event.type {
+        case .rightMouseUp:
+            onRightClick?()
+        default:
+            togglePopover()
+        }
+    }
+
+    private func togglePopover() {
         if popover.isShown {
             popover.performClose(nil)
         } else if let button = statusItem.button {
