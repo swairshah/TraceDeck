@@ -541,11 +541,23 @@ final class StorageManager: @unchecked Sendable {
         }) ?? []
     }
 
-    func fetchWorkflowSessionsForDay(_ date: Date) -> [WorkflowSession] {
+    func fetchWorkflowSessionsForDay(_ date: Date, activeSessionID: Int64? = nil) -> [WorkflowSession] {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        return fetchWorkflowSessionsForDateRange(from: startOfDay, to: endOfDay)
+        let sessions = fetchWorkflowSessionsForDateRange(from: startOfDay, to: endOfDay)
+
+        // Filter out empty sessions (no screenshots, no audio) unless currently active
+        return sessions.filter { session in
+            // Always keep the active session
+            if let activeSessionID, session.id == activeSessionID { return true }
+            // Keep sessions that have content
+            guard let id = session.id else { return false }
+            let hasScreenshots = !fetchScreenshots(forSessionID: id, limit: 1).isEmpty
+            if hasScreenshots { return true }
+            let hasAudio = !fetchAudioRecordings(forSessionID: id).isEmpty
+            return hasAudio
+        }
     }
 
     // MARK: - Save Screenshot

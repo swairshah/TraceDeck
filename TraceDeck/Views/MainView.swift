@@ -319,7 +319,7 @@ struct MainView: View {
     }
 
     private func loadWorkflowSessions(for date: Date) {
-        workflowSessions = StorageManager.shared.fetchWorkflowSessionsForDay(date)
+        workflowSessions = StorageManager.shared.fetchWorkflowSessionsForDay(date, activeSessionID: AppState.shared.currentSessionID)
     }
     
     private func closeDayActivityView() {
